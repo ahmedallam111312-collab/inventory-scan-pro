@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useInventory } from '@/contexts/InventoryContext';
 import DashboardLayout from '@/components/layout/DashboardLayout';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -27,7 +27,9 @@ import { Package, Plus, Pencil, Trash2, Loader2 } from 'lucide-react';
 import { Product } from '@/types/database';
 
 const Products = () => {
-  const { products, batches, addProduct, updateProduct, deleteProduct, getTotalStock } = useInventory();
+  // Fix 1: Default products to empty array to prevent "undefined" crash
+  const { products = [], addProduct, updateProduct, deleteProduct, getTotalStock } = useInventory();
+
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -36,24 +38,25 @@ const Products = () => {
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [sku, setSku] = useState('');
-  const [barcodes, setBarcodes] = useState('');
+  const [quantity, setQuantity] = useState(''); // Changed from Barcodes to Quantity
   const [imageUrl, setImageUrl] = useState('');
 
   const resetForm = () => {
     setName('');
     setPrice('');
     setSku('');
-    setBarcodes('');
+    setQuantity('');
     setImageUrl('');
     setEditingProduct(null);
   };
 
   const openEditDialog = (product: Product) => {
     setEditingProduct(product);
-    setName(product.name);
-    setPrice(product.price.toString());
-    setSku(product.sku);
-    setBarcodes(product.barcodes.join(', '));
+    setName(product.name || '');
+    setPrice(product.price?.toString() || '');
+    setSku(product.sku || '');
+    // Check if quantity exists directly, otherwise fallback
+    setQuantity(product.quantity?.toString() || '0');
     setImageUrl(product.image_url || '');
     setIsAddDialogOpen(true);
   };
@@ -67,11 +70,12 @@ const Products = () => {
 
     setIsSubmitting(true);
     try {
+      // Fix 2: Align object with your actual Database Columns
       const productData = {
         name,
         price: parseFloat(price),
         sku,
-        barcodes: barcodes.split(',').map(b => b.trim()).filter(Boolean),
+        quantity: parseInt(quantity) || 0, // Save to the new quantity column
         image_url: imageUrl || null,
       };
 
@@ -85,6 +89,9 @@ const Products = () => {
 
       setIsAddDialogOpen(false);
       resetForm();
+    } catch (error) {
+      console.error(error);
+      toast.error('Failed to save product');
     } finally {
       setIsSubmitting(false);
     }
@@ -96,6 +103,9 @@ const Products = () => {
       toast.success('Product deleted');
     }
   };
+
+  // Safe Access Helper
+  const safeProducts = products || [];
 
   return (
     <DashboardLayout>
@@ -167,13 +177,15 @@ const Products = () => {
                   </div>
                 </div>
 
+                {/* Changed Barcodes to Quantity to match your DB */}
                 <div className="space-y-2">
-                  <Label htmlFor="barcodes">Barcodes (comma-separated)</Label>
+                  <Label htmlFor="quantity">Initial Quantity</Label>
                   <Input
-                    id="barcodes"
-                    value={barcodes}
-                    onChange={(e) => setBarcodes(e.target.value)}
-                    placeholder="123456789, 987654321"
+                    id="quantity"
+                    type="number"
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    placeholder="0"
                   />
                 </div>
 
@@ -224,16 +236,17 @@ const Products = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {products.length === 0 ? (
+                {/* Fix 3: Handle loading/empty states safely */}
+                {!safeProducts || safeProducts.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
                       <Package className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                      No products yet. Add your first product!
+                      No products found.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  products.map(product => (
-                    <TableRow key={product.id}>
+                  safeProducts.map((product) => (
+                    <TableRow key={product.id || Math.random()}>
                       <TableCell>
                         <div className="flex items-center gap-3">
                           {product.image_url ? (
@@ -241,6 +254,10 @@ const Products = () => {
                               src={product.image_url}
                               alt={product.name}
                               className="w-10 h-10 rounded-lg object-cover"
+                              onError={(e) => {
+                                // Fallback if image link is broken
+                                (e.target as HTMLImageElement).src = 'https://via.placeholder.com/40';
+                              }}
                             />
                           ) : (
                             <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center">
@@ -248,22 +265,20 @@ const Products = () => {
                             </div>
                           )}
                           <div>
-                            <p className="font-medium">{product.name}</p>
-                            <p className="text-xs text-muted-foreground font-mono">
-                              {product.barcodes.length} barcode(s)
-                            </p>
+                            <p className="font-medium">{product.name || 'Unnamed Product'}</p>
                           </div>
                         </div>
                       </TableCell>
                       <TableCell>
                         <code className="text-sm bg-muted px-2 py-1 rounded">
-                          {product.sku}
+                          {product.sku || 'No SKU'}
                         </code>
                       </TableCell>
-                      <TableCell>${product.price.toFixed(2)}</TableCell>
+                      <TableCell>${Number(product.price || 0).toFixed(2)}</TableCell>
                       <TableCell>
                         <Badge variant="secondary">
-                          {getTotalStock(product.id)} units
+                          {/* Prefer direct quantity, fallback to calculated stock */}
+                          {product.quantity ?? getTotalStock(product.id) ?? 0} units
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
