@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useInventory } from '@/contexts/InventoryContext'; // CONNECTED TO REAL CONTEXT
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,99 +9,43 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   Scan, Search, Minus, Plus, Camera, CheckCircle2,
   History, TrendingUp, Package, AlertTriangle,
-  Download, Zap, Clock, BarChart3, X, ChevronRight
+  Download, Zap, Clock, BarChart3, X, ChevronRight, Loader2
 } from 'lucide-react';
-
-// Mock Inventory Context (replace with actual context in production)
-const useInventory = () => {
-  const [products] = useState([
-    {
-      id: '1',
-      name: 'iPhone 15 Pro',
-      sku: 'APL-IP15P-256',
-      price: 999,
-      totalStock: 45,
-      barcodes: ['194253908913', 'iPhone15Pro'],
-      category: 'Electronics',
-      reorderPoint: 10
-    },
-    {
-      id: '2',
-      name: 'Samsung Galaxy S24',
-      sku: 'SAM-GS24-128',
-      price: 799,
-      totalStock: 32,
-      barcodes: ['887276764665', 'GalaxyS24'],
-      category: 'Electronics',
-      reorderPoint: 15
-    },
-    {
-      id: '3',
-      name: 'Sony WH-1000XM5',
-      sku: 'SNY-WH1000XM5',
-      price: 399,
-      totalStock: 78,
-      barcodes: ['027242923935', 'WH1000XM5'],
-      category: 'Audio',
-      reorderPoint: 20
-    }
-  ]);
-
-  const [batches] = useState([
-    { id: 'b1', product_id: '1', quantity: 45, expiryDate: null },
-    { id: 'b2', product_id: '2', quantity: 32, expiryDate: null },
-    { id: 'b3', product_id: '3', quantity: 78, expiryDate: null }
-  ]);
-
-  const getProductByBarcode = (barcode) => {
-    return products.find(p => p.barcodes.some(b => b.toLowerCase().includes(barcode.toLowerCase())));
-  };
-
-  const scanIn = async (productId, batchId, quantity) => {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    return { success: true };
-  };
-
-  const scanOut = async (productId, batchId, quantity) => {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    return { success: true };
-  };
-
-  return { products, batches, scanIn, scanOut, getProductByBarcode };
-};
+import { toast } from 'sonner';
 
 const Scanner = () => {
-  const { products, batches, scanIn, scanOut, getProductByBarcode } = useInventory();
+  // 1. CONNECT TO REAL ENVIRONMENT
+  const { products, updateProduct } = useInventory();
 
   // Core state
   const [barcode, setBarcode] = useState('');
   const [activeTab, setActiveTab] = useState('in');
-  const [scannedProduct, setScannedProduct] = useState(null);
+  const [scannedProduct, setScannedProduct] = useState<any>(null);
   const [quantity, setQuantity] = useState(1);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
   // Advanced features state
-  const [recentScans, setRecentScans] = useState([]);
-  const [scanHistory, setScanHistory] = useState([]);
+  const [recentScans, setRecentScans] = useState<any[]>([]);
+  const [scanHistory, setScanHistory] = useState<any[]>([]);
   const [continuousScan, setContinuousScan] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showStats, setShowStats] = useState(false);
-  const [quickActions, setQuickActions] = useState([]);
-  const [searchSuggestions, setSearchSuggestions] = useState([]);
+  const [quickActions, setQuickActions] = useState<any[]>([]);
+  const [searchSuggestions, setSearchSuggestions] = useState<any[]>([]);
 
-  const inputRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const scanTimeoutRef = useRef(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initialize audio context
   useEffect(() => {
-    audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-    return () => audioContextRef.current?.close();
+    audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    return () => { audioContextRef.current?.close(); };
   }, []);
 
   // Play sound feedback
-  const playSound = useCallback((type) => {
+  const playSound = useCallback((type: 'success' | 'error') => {
     if (!soundEnabled || !audioContextRef.current) return;
 
     const ctx = audioContextRef.current;
@@ -126,7 +71,7 @@ const Scanner = () => {
   }, [soundEnabled]);
 
   // Vibration feedback
-  const vibrate = useCallback((pattern) => {
+  const vibrate = useCallback((pattern: number[]) => {
     if ('vibrate' in navigator) {
       navigator.vibrate(pattern);
     }
@@ -139,13 +84,13 @@ const Scanner = () => {
     }
   }, [isCameraOpen, scannedProduct, isProcessing]);
 
-  // Load scan history from storage
+  // Load scan history from LOCAL STORAGE
   useEffect(() => {
-    const loadHistory = async () => {
+    const loadHistory = () => {
       try {
-        const result = await window.storage.get('scan_history');
+        const result = localStorage.getItem('scan_history');
         if (result) {
-          setScanHistory(JSON.parse(result.value));
+          setScanHistory(JSON.parse(result));
         }
       } catch (error) {
         console.log('No history found');
@@ -156,7 +101,7 @@ const Scanner = () => {
 
   // Keyboard shortcuts
   useEffect(() => {
-    const handleKeyPress = (e) => {
+    const handleKeyPress = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey) {
         switch (e.key) {
           case 'k':
@@ -187,8 +132,8 @@ const Scanner = () => {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [scannedProduct, isProcessing]);
 
-  // Search suggestions with fuzzy matching
-  const updateSearchSuggestions = useCallback((term) => {
+  // Search suggestions
+  const updateSearchSuggestions = useCallback((term: string) => {
     if (!term || term.length < 2) {
       setSearchSuggestions([]);
       return;
@@ -197,30 +142,26 @@ const Scanner = () => {
     const cleanTerm = term.toLowerCase();
     const matches = products
       .filter(p =>
-        p.name.toLowerCase().includes(cleanTerm) ||
-        p.sku.toLowerCase().includes(cleanTerm) ||
-        p.barcodes.some(b => b.toLowerCase().includes(cleanTerm))
+        (p.name && p.name.toLowerCase().includes(cleanTerm)) ||
+        (p.sku && p.sku.toLowerCase().includes(cleanTerm))
       )
       .slice(0, 5);
 
     setSearchSuggestions(matches);
   }, [products]);
 
-  // Enhanced product search
-  const findProduct = useCallback((term) => {
+  // Enhanced product search (Adapted for Real DB)
+  const findProduct = useCallback((term: string) => {
     if (!term) return;
 
     const cleanTerm = term.trim().toLowerCase();
-    let found = getProductByBarcode(term);
 
-    if (!found) {
-      // Fuzzy search
-      found = products.find(p =>
-        p.name.toLowerCase().includes(cleanTerm) ||
-        p.sku.toLowerCase().includes(cleanTerm) ||
-        p.barcodes.some(b => b.toLowerCase().includes(cleanTerm))
-      );
-    }
+    // Search by SKU or Name (Exact or Includes)
+    const found = products.find(p =>
+      (p.sku && p.sku.toLowerCase() === cleanTerm) ||
+      (p.sku && p.sku.toLowerCase().includes(cleanTerm)) ||
+      (p.name && p.name.toLowerCase().includes(cleanTerm))
+    );
 
     if (found) {
       setScannedProduct(found);
@@ -236,20 +177,18 @@ const Scanner = () => {
         return [found, ...filtered].slice(0, 5);
       });
 
-      // Update quick actions
       updateQuickActions(found);
-
-      showToast('success', 'تم العثور على المنتج', found.name);
+      toast.success(`Found: ${found.name}`);
     } else {
       playSound('error');
       vibrate([100, 50, 100]);
-      showToast('error', 'غير موجود', `لا يوجد منتج يطابق "${term}"`);
+      toast.error(`Product not found: "${term}"`);
       setBarcode('');
     }
-  }, [products, getProductByBarcode, playSound, vibrate]);
+  }, [products, playSound, vibrate]);
 
-  // Update quick actions based on product
-  const updateQuickActions = useCallback((product) => {
+  // Update quick actions
+  const updateQuickActions = useCallback((product: any) => {
     const actions = [
       { label: '+1', quantity: 1 },
       { label: '+5', quantity: 5 },
@@ -259,71 +198,38 @@ const Scanner = () => {
     setQuickActions(actions);
   }, []);
 
-  // Toast notification system
-  const showToast = useCallback((type, title, description) => {
-    // In production, use sonner toast
-    console.log(`${type}: ${title} - ${description}`);
-  }, []);
-
-  // Handle form submission
-  const handleSearch = (e) => {
+  const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     findProduct(barcode);
   };
 
-  // Handle camera scan
-  const handleCameraScan = useCallback((detectedCodes) => {
-    if (detectedCodes && detectedCodes.length > 0) {
-      const code = detectedCodes[0].rawValue;
-
-      if (continuousScan) {
-        // Debounce continuous scanning
-        if (scanTimeoutRef.current) {
-          clearTimeout(scanTimeoutRef.current);
-        }
-
-        scanTimeoutRef.current = setTimeout(() => {
-          findProduct(code);
-
-          // Auto-submit after 2 seconds in continuous mode
-          setTimeout(() => {
-            if (scannedProduct) {
-              handleSubmit();
-            }
-          }, 2000);
-        }, 300);
-      } else {
-        findProduct(code);
-      }
-    }
-  }, [continuousScan, findProduct, scannedProduct]);
-
-  // Enhanced submission with batch logic
+  // REAL SUBMISSION LOGIC
   const handleSubmit = async () => {
     if (!scannedProduct || isProcessing) return;
 
     setIsProcessing(true);
 
-    const productBatches = batches.filter(b => b.product_id === scannedProduct.id);
-    const targetBatch = productBatches.length > 0 ? productBatches[0] : null;
-
-    if (!targetBatch) {
-      showToast('error', 'لا توجد دفعة', 'يجب تهيئة المخزون لهذا المنتج أولاً');
-      playSound('error');
-      setIsProcessing(false);
-      return;
-    }
-
     try {
-      const operation = activeTab === 'in' ? 'إضافة' : 'صرف';
+      const operation = activeTab === 'in' ? 'Added' : 'Removed';
+      const currentQty = scannedProduct.quantity || 0;
+
+      let newQuantity = currentQty;
 
       if (activeTab === 'in') {
-        await scanIn(scannedProduct.id, targetBatch.id, quantity);
+        newQuantity = currentQty + quantity;
       } else {
-        await scanOut(scannedProduct.id, targetBatch.id, quantity);
+        newQuantity = currentQty - quantity;
+        if (newQuantity < 0) {
+          toast.error("Insufficient stock!");
+          setIsProcessing(false);
+          return;
+        }
       }
 
-      // Log to history
+      // Update Supabase
+      await updateProduct(scannedProduct.id, { quantity: newQuantity });
+
+      // Log to local history
       const historyEntry = {
         id: Date.now().toString(),
         product: scannedProduct,
@@ -336,28 +242,28 @@ const Scanner = () => {
       const newHistory = [historyEntry, ...scanHistory].slice(0, 100);
       setScanHistory(newHistory);
 
-      // Save to storage
-      await window.storage.set('scan_history', JSON.stringify(newHistory));
+      // Save to Local Storage
+      localStorage.setItem('scan_history', JSON.stringify(newHistory));
 
       playSound('success');
       vibrate([50, 100, 50]);
-      showToast('success', `تمت ${operation} بنجاح`, `${quantity} × ${scannedProduct.name}`);
+      toast.success(`${operation} successfully`, {
+        description: `${quantity} × ${scannedProduct.name}`
+      });
 
-      // Auto-reset in continuous mode
       if (continuousScan) {
         setTimeout(() => resetScanner(), 1000);
       } else {
         resetScanner();
       }
-    } catch (error) {
+    } catch (error: any) {
       playSound('error');
-      showToast('error', 'حدث خطأ', error.message);
+      toast.error('Error', { description: error.message });
     } finally {
       setIsProcessing(false);
     }
   };
 
-  // Reset scanner
   const resetScanner = useCallback(() => {
     setScannedProduct(null);
     setQuantity(1);
@@ -377,7 +283,6 @@ const Scanner = () => {
     totalOut: scanHistory.filter(s => s.operation === 'out').reduce((sum, s) => sum + s.quantity, 0)
   };
 
-  // Export history as CSV
   const exportHistory = () => {
     const csv = [
       ['Timestamp', 'Product', 'SKU', 'Operation', 'Quantity', 'User'],
@@ -412,8 +317,8 @@ const Scanner = () => {
                   <Scan className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <CardTitle className="text-2xl">الماسح الضوئي الاحترافي</CardTitle>
-                  <p className="text-sm text-slate-500 mt-1">نظام إدارة المخزون المتقدم</p>
+                  <CardTitle className="text-2xl">Pro Scanner</CardTitle>
+                  <p className="text-sm text-slate-500 mt-1">Inventory Management System</p>
                 </div>
               </div>
 
@@ -425,7 +330,7 @@ const Scanner = () => {
                   className="gap-2"
                 >
                   <BarChart3 className="w-4 h-4" />
-                  الإحصائيات
+                  Stats
                 </Button>
                 <Button
                   variant="outline"
@@ -434,7 +339,7 @@ const Scanner = () => {
                   className="gap-2"
                 >
                   <Download className="w-4 h-4" />
-                  تصدير
+                  Export
                 </Button>
               </div>
             </div>
@@ -449,7 +354,7 @@ const Scanner = () => {
                 <div className="bg-blue-50 p-4 rounded-lg">
                   <div className="flex items-center gap-2 text-blue-600 mb-1">
                     <TrendingUp className="w-4 h-4" />
-                    <span className="text-sm font-medium">إجمالي العمليات</span>
+                    <span className="text-sm font-medium">Total Scans</span>
                   </div>
                   <p className="text-2xl font-bold">{stats.totalScans}</p>
                 </div>
@@ -457,7 +362,7 @@ const Scanner = () => {
                 <div className="bg-green-50 p-4 rounded-lg">
                   <div className="flex items-center gap-2 text-green-600 mb-1">
                     <Clock className="w-4 h-4" />
-                    <span className="text-sm font-medium">اليوم</span>
+                    <span className="text-sm font-medium">Today</span>
                   </div>
                   <p className="text-2xl font-bold">{stats.todayScans}</p>
                 </div>
@@ -465,7 +370,7 @@ const Scanner = () => {
                 <div className="bg-emerald-50 p-4 rounded-lg">
                   <div className="flex items-center gap-2 text-emerald-600 mb-1">
                     <Plus className="w-4 h-4" />
-                    <span className="text-sm font-medium">إضافة</span>
+                    <span className="text-sm font-medium">Added</span>
                   </div>
                   <p className="text-2xl font-bold">{stats.totalIn}</p>
                 </div>
@@ -473,7 +378,7 @@ const Scanner = () => {
                 <div className="bg-orange-50 p-4 rounded-lg">
                   <div className="flex items-center gap-2 text-orange-600 mb-1">
                     <Minus className="w-4 h-4" />
-                    <span className="text-sm font-medium">صرف</span>
+                    <span className="text-sm font-medium">Removed</span>
                   </div>
                   <p className="text-2xl font-bold">{stats.totalOut}</p>
                 </div>
@@ -491,24 +396,24 @@ const Scanner = () => {
                   <TabsList className="grid w-full grid-cols-2 mb-6">
                     <TabsTrigger value="in" className="gap-2">
                       <Plus className="w-4 h-4" />
-                      إضافة (+)
+                      Scan In (+)
                     </TabsTrigger>
                     <TabsTrigger value="out" className="gap-2">
                       <Minus className="w-4 h-4" />
-                      صرف (-)
+                      Scan Out (-)
                     </TabsTrigger>
                   </TabsList>
 
                   <TabsContent value={activeTab} className="space-y-4">
-                    {/* Camera View */}
+                    {/* Camera View - PLACEHOLDER UI */}
                     {isCameraOpen && (
                       <div className="relative bg-black rounded-lg overflow-hidden" style={{ height: '400px' }}>
                         <div className="absolute inset-0 flex items-center justify-center">
                           <div className="text-center text-white p-8">
                             <Camera className="w-16 h-16 mx-auto mb-4 animate-pulse" />
-                            <p className="text-lg mb-2">وجه الكاميرا نحو الباركود</p>
+                            <p className="text-lg mb-2">Point camera at barcode</p>
                             <p className="text-sm text-slate-300">
-                              المسح المستمر: {continuousScan ? 'مفعّل' : 'معطّل'}
+                              Continuous Scan: {continuousScan ? 'On' : 'Off'}
                             </p>
                           </div>
                         </div>
@@ -520,13 +425,13 @@ const Scanner = () => {
                             className="gap-2"
                           >
                             <Zap className="w-4 h-4" />
-                            {continuousScan ? 'تعطيل' : 'تفعيل'} المسح المستمر
+                            {continuousScan ? 'Disable' : 'Enable'} Continuous
                           </Button>
                           <Button
                             variant="secondary"
                             onClick={() => setIsCameraOpen(false)}
                           >
-                            إغلاق الكاميرا
+                            Close Camera
                           </Button>
                         </div>
                       </div>
@@ -544,8 +449,8 @@ const Scanner = () => {
                                 setBarcode(e.target.value);
                                 updateSearchSuggestions(e.target.value);
                               }}
-                              placeholder="امسح أو اكتب رمز المنتج (Ctrl+K)..."
-                              className="text-lg h-14 pr-12 text-right"
+                              placeholder="Scan or type product SKU/Name (Ctrl+K)..."
+                              className="text-lg h-14 pr-12"
                               autoFocus
                             />
                             <Search className="absolute right-4 top-4 w-5 h-5 text-slate-400" />
@@ -558,16 +463,19 @@ const Scanner = () => {
                                 {searchSuggestions.map(product => (
                                   <button
                                     key={product.id}
+                                    type="button"
                                     onClick={() => findProduct(product.sku)}
-                                    className="w-full text-right p-3 hover:bg-slate-50 rounded-lg transition-colors flex items-center justify-between"
+                                    className="w-full text-left p-3 hover:bg-slate-50 rounded-lg transition-colors flex items-center justify-between"
                                   >
-                                    <Badge variant="secondary">{product.sku}</Badge>
-                                    <div>
-                                      <p className="font-medium">{product.name}</p>
-                                      <p className="text-sm text-slate-500">
-                                        المخزون: {product.totalStock}
-                                      </p>
+                                    <div className="flex items-center gap-3">
+                                      <Badge variant="secondary">{product.sku}</Badge>
+                                      <div>
+                                        <p className="font-medium">{product.name}</p>
+                                      </div>
                                     </div>
+                                    <p className="text-sm text-slate-500">
+                                      Stock: {product.quantity || 0}
+                                    </p>
                                   </button>
                                 ))}
                               </CardContent>
@@ -577,7 +485,7 @@ const Scanner = () => {
                           <div className="flex gap-2">
                             <Button type="submit" className="flex-1 h-12 text-lg gap-2">
                               <Search className="w-5 h-5" />
-                              بحث
+                              Search
                             </Button>
                             <Button
                               type="button"
@@ -586,7 +494,7 @@ const Scanner = () => {
                               variant="outline"
                             >
                               <Camera className="w-5 h-5" />
-                              كاميرا
+                              Camera
                             </Button>
                           </div>
                         </form>
@@ -596,20 +504,20 @@ const Scanner = () => {
                           <div className="pt-4 border-t">
                             <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
                               <History className="w-4 h-4" />
-                              عمليات مسح حديثة
+                              Recent Scans
                             </h3>
                             <div className="space-y-2">
                               {recentScans.map(product => (
                                 <button
                                   key={product.id}
                                   onClick={() => findProduct(product.sku)}
-                                  className="w-full text-right p-3 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors flex items-center justify-between"
+                                  className="w-full text-left p-3 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors flex items-center justify-between"
                                 >
-                                  <ChevronRight className="w-4 h-4 text-slate-400" />
                                   <div>
                                     <p className="font-medium text-sm">{product.name}</p>
                                     <p className="text-xs text-slate-500">{product.sku}</p>
                                   </div>
+                                  <ChevronRight className="w-4 h-4 text-slate-400" />
                                 </button>
                               ))}
                             </div>
@@ -623,17 +531,8 @@ const Scanner = () => {
                       <div className="space-y-4">
                         <Alert className="border-2 border-green-200 bg-green-50">
                           <CheckCircle2 className="w-5 h-5 text-green-600" />
-                          <AlertDescription className="text-right">
+                          <AlertDescription className="w-full">
                             <div className="flex items-center justify-between">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={resetScanner}
-                                className="gap-2"
-                              >
-                                <X className="w-4 h-4" />
-                                إلغاء
-                              </Button>
                               <div>
                                 <div className="flex items-center gap-2 mb-1">
                                   <Badge variant="secondary">{scannedProduct.sku}</Badge>
@@ -641,6 +540,15 @@ const Scanner = () => {
                                 </div>
                                 <p className="font-bold text-lg">{scannedProduct.name}</p>
                               </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={resetScanner}
+                                className="gap-2"
+                              >
+                                <X className="w-4 h-4" />
+                                Cancel
+                              </Button>
                             </div>
                           </AlertDescription>
                         </Alert>
@@ -648,29 +556,29 @@ const Scanner = () => {
                         <div className="grid grid-cols-2 gap-4">
                           <Card className="bg-blue-50 border-blue-200">
                             <CardContent className="pt-4 text-center">
-                              <p className="text-sm text-slate-600 mb-1">السعر</p>
+                              <p className="text-sm text-slate-600 mb-1">Price</p>
                               <p className="text-2xl font-bold text-blue-600">
                                 ${scannedProduct.price}
                               </p>
                             </CardContent>
                           </Card>
 
-                          <Card className={`border-2 ${scannedProduct.totalStock <= scannedProduct.reorderPoint
-                              ? 'bg-orange-50 border-orange-300'
-                              : 'bg-emerald-50 border-emerald-200'
+                          <Card className={`border-2 ${(scannedProduct.quantity || 0) <= 10
+                            ? 'bg-orange-50 border-orange-300'
+                            : 'bg-emerald-50 border-emerald-200'
                             }`}>
                             <CardContent className="pt-4 text-center">
                               <div className="flex items-center justify-center gap-2 mb-1">
-                                {scannedProduct.totalStock <= scannedProduct.reorderPoint && (
+                                {(scannedProduct.quantity || 0) <= 10 && (
                                   <AlertTriangle className="w-4 h-4 text-orange-500" />
                                 )}
-                                <p className="text-sm text-slate-600">المخزون الحالي</p>
+                                <p className="text-sm text-slate-600">Current Stock</p>
                               </div>
-                              <p className={`text-2xl font-bold ${scannedProduct.totalStock <= scannedProduct.reorderPoint
-                                  ? 'text-orange-600'
-                                  : 'text-emerald-600'
+                              <p className={`text-2xl font-bold ${(scannedProduct.quantity || 0) <= 10
+                                ? 'text-orange-600'
+                                : 'text-emerald-600'
                                 }`}>
-                                {scannedProduct.totalStock}
+                                {scannedProduct.quantity || 0}
                               </p>
                             </CardContent>
                           </Card>
@@ -681,25 +589,25 @@ const Scanner = () => {
                           <CardContent className="pt-6">
                             <div className="flex items-center justify-between mb-4">
                               <Button
-                                onClick={() => setQuantity(q => Math.min(1000, q + 1))}
-                                size="lg"
-                                className="w-16 h-16 text-2xl"
-                              >
-                                <Plus className="w-6 h-6" />
-                              </Button>
-
-                              <div className="text-center">
-                                <p className="text-sm text-slate-600 mb-2">الكمية</p>
-                                <p className="text-4xl font-bold">{quantity}</p>
-                              </div>
-
-                              <Button
                                 onClick={() => setQuantity(q => Math.max(1, q - 1))}
                                 size="lg"
                                 variant="outline"
                                 className="w-16 h-16 text-2xl"
                               >
                                 <Minus className="w-6 h-6" />
+                              </Button>
+
+                              <div className="text-center">
+                                <p className="text-sm text-slate-600 mb-2">Quantity</p>
+                                <p className="text-4xl font-bold">{quantity}</p>
+                              </div>
+
+                              <Button
+                                onClick={() => setQuantity(q => Math.min(1000, q + 1))}
+                                size="lg"
+                                className="w-16 h-16 text-2xl"
+                              >
+                                <Plus className="w-6 h-6" />
                               </Button>
                             </div>
 
@@ -726,14 +634,13 @@ const Scanner = () => {
                             >
                               {isProcessing ? (
                                 <>
-                                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                  جاري المعالجة...
+                                  <Loader2 className="w-5 h-5 animate-spin" />
+                                  Processing...
                                 </>
                               ) : (
                                 <>
                                   <CheckCircle2 className="w-5 h-5" />
-                                  تأكيد {activeTab === 'in' ? 'الإضافة' : 'الصرف'}
-                                  (Enter)
+                                  Confirm {activeTab === 'in' ? 'Scan In' : 'Scan Out'} (Enter)
                                 </>
                               )}
                             </Button>
@@ -753,21 +660,21 @@ const Scanner = () => {
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
                   <History className="w-5 h-5" />
-                  سجل العمليات
+                  History
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 max-h-[600px] overflow-y-auto">
                 {scanHistory.length === 0 ? (
                   <p className="text-center text-slate-500 py-8 text-sm">
-                    لا توجد عمليات حتى الآن
+                    No recent scans
                   </p>
                 ) : (
                   scanHistory.slice(0, 20).map((item) => (
                     <div
                       key={item.id}
                       className={`p-3 rounded-lg border-2 ${item.operation === 'in'
-                          ? 'bg-green-50 border-green-200'
-                          : 'bg-orange-50 border-orange-200'
+                        ? 'bg-green-50 border-green-200'
+                        : 'bg-orange-50 border-orange-200'
                         }`}
                     >
                       <div className="flex items-start justify-between mb-2">
@@ -783,12 +690,7 @@ const Scanner = () => {
                         </div>
                       </div>
                       <p className="text-xs text-slate-500 text-right">
-                        {new Date(item.timestamp).toLocaleString('ar-EG', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          day: 'numeric',
-                          month: 'short'
-                        })}
+                        {new Date(item.timestamp).toLocaleString()}
                       </p>
                     </div>
                   ))
@@ -799,11 +701,11 @@ const Scanner = () => {
             {/* Settings */}
             <Card className="border-slate-200">
               <CardHeader>
-                <CardTitle className="text-lg">الإعدادات</CardTitle>
+                <CardTitle className="text-lg">Settings</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm">الصوت</span>
+                  <span className="text-sm">Sound Effects</span>
                   <button
                     onClick={() => setSoundEnabled(!soundEnabled)}
                     className={`w-12 h-6 rounded-full transition-colors ${soundEnabled ? 'bg-blue-500' : 'bg-slate-300'
@@ -817,23 +719,23 @@ const Scanner = () => {
                 </div>
 
                 <div className="pt-2 border-t">
-                  <p className="text-xs text-slate-500 mb-2">اختصارات لوحة المفاتيح</p>
+                  <p className="text-xs text-slate-500 mb-2">Shortcuts</p>
                   <div className="space-y-1 text-xs">
                     <div className="flex justify-between">
                       <span className="text-slate-600">Ctrl+K</span>
-                      <span>التركيز على البحث</span>
+                      <span>Focus Search</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-600">Ctrl+C</span>
-                      <span>فتح الكاميرا</span>
+                      <span>Open Camera</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-600">Enter</span>
-                      <span>تأكيد العملية</span>
+                      <span>Confirm</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-600">Esc</span>
-                      <span>إلغاء</span>
+                      <span>Cancel</span>
                     </div>
                   </div>
                 </div>
