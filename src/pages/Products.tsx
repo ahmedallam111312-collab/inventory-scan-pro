@@ -21,6 +21,8 @@ import { toast } from 'sonner';
 
 const Products = () => {
   const { products, addProduct, updateProduct, deleteProduct, fetchProducts } = useInventory();
+
+  // 1. NEW: Reference for the hidden file input
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Force refresh data on load
@@ -32,7 +34,7 @@ const Products = () => {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false); // New state for loading spinner
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState('all');
@@ -153,7 +155,7 @@ const Products = () => {
     }
   };
 
-  // --- NEW IMPORT LOGIC (Solves the "ID is null" error) ---
+  // --- 2. NEW IMPORT LOGIC (Solves the "ID is null" error) ---
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -163,21 +165,16 @@ const Products = () => {
       setIsImporting(true);
       try {
         const text = e.target?.result as string;
-        // Split by new line, ignore empty lines
         const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
-
-        // Assume first row is headers
-        // We look for column order based on standard CSV (sku, name, price...)
-        // Or we just naively assume column indexes: SKU=0, Name=1, Price=2, Qty=3
 
         let successCount = 0;
 
+        // Skip header row (i = 1)
         for (let i = 1; i < lines.length; i++) {
           const columns = lines[i].split(',');
-          if (columns.length < 3) continue; // Skip bad rows
+          if (columns.length < 3) continue;
 
-          // CLEAN THE DATA
-          // Remove quotes if present
+          // Clean quotes
           const clean = (val: string) => val ? val.replace(/^"|"$/g, '').trim() : '';
 
           const pSku = clean(columns[0]);
@@ -187,9 +184,9 @@ const Products = () => {
 
           if (!pSku || !pName) continue;
 
-          // Skip existing products to avoid duplicates (optional, or update them)
           const exists = products.find(p => p.sku === pSku);
           if (!exists) {
+            // We do NOT send 'id'. Supabase creates it automatically.
             await addProduct({
               sku: pSku,
               name: pName,
@@ -204,7 +201,7 @@ const Products = () => {
         if (fetchProducts) fetchProducts();
       } catch (err) {
         console.error(err);
-        toast.error('Import failed. Check CSV format.');
+        toast.error('Import failed.');
       } finally {
         setIsImporting(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -213,15 +210,15 @@ const Products = () => {
     reader.readAsText(file);
   };
 
-  // --- FIXED EXPORT LOGIC (Solves the "0 Quantity" error) ---
+  // --- 3. FIXED EXPORT LOGIC (Solves the "0 Quantity" error) ---
   const exportToCSV = () => {
     const csvContent = [
       ['Name', 'SKU', 'Price', 'Quantity', 'Category', 'Total Value'], // Header
       ...filteredProducts.map(p => [
-        `"${p.name}"`, // Quote names to handle commas
+        `"${p.name}"`,
         `"${p.sku}"`,
         p.price,
-        Number(p.quantity || 0), // FORCE NUMBER FORMAT
+        Number(p.quantity || 0), // Forces Number Format
         `"${p.category || ''}"`,
         (p.price || 0) * (p.quantity || 0)
       ])
@@ -240,9 +237,9 @@ const Products = () => {
   const getStockStatus = (product: any) => {
     const qty = product.quantity || 0;
     const point = product.reorderPoint || 10;
-    if (qty === 0) return { label: 'Out of Stock', variant: 'destructive', color: 'bg-red-100 text-red-700' };
-    if (qty <= point) return { label: 'Low Stock', variant: 'secondary', color: 'bg-orange-100 text-orange-700' };
-    return { label: 'In Stock', variant: 'default', color: 'bg-green-100 text-green-700' };
+    if (qty === 0) return { label: 'نفذت', variant: 'destructive', color: 'bg-red-100 text-red-700' };
+    if (qty <= point) return { label: 'منخفض', variant: 'secondary', color: 'bg-orange-100 text-orange-700' };
+    return { label: 'متوفر', variant: 'default', color: 'bg-green-100 text-green-700' };
   };
 
   return (
@@ -267,6 +264,7 @@ const Products = () => {
           </div>
 
           <div className="flex gap-2">
+            {/* New Import Button */}
             <Button
               variant="outline"
               onClick={() => fileInputRef.current?.click()}
@@ -291,7 +289,7 @@ const Products = () => {
                   <DialogTitle>{editingProduct ? 'تعديل المنتج' : 'إضافة منتج'}</DialogTitle>
                 </DialogHeader>
                 <form onSubmit={handleSubmit} className="space-y-4 mt-4">
-                  {/* ... FORM INPUTS (Keep same as before) ... */}
+                  {/* Inputs */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="col-span-2 space-y-2">
                       <Label>اسم المنتج</Label>

@@ -1,31 +1,17 @@
 import React, { useRef, useState } from 'react';
 import { useInventory } from '@/contexts/InventoryContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/integrations/supabase/client';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import {
-  ShieldCheck,
-  Download,
-  Upload,
-  DollarSign,
-  AlertTriangle,
-  Activity,
-  FileSpreadsheet,
-  Loader2,
-  Trash2
+  ShieldCheck, Download, Upload, DollarSign, AlertTriangle,
+  Activity, FileSpreadsheet, Loader2, Trash2, Box
 } from 'lucide-react';
-import { format, isWithinInterval, addDays } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { toast } from 'sonner';
 
@@ -33,7 +19,7 @@ import { toast } from 'sonner';
 const ADMIN_EMAIL = "ahmedallam111312@gmail.com";
 
 const Admin = () => {
-  const { products, batches, auditLogs, refreshData, clearAllData } = useInventory();
+  const { products, auditLogs, fetchProducts, clearAllData, addProduct } = useInventory();
   const { user } = useAuth();
   const [isImporting, setIsImporting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -41,20 +27,9 @@ const Admin = () => {
 
   const isAdmin = user?.email === ADMIN_EMAIL;
 
-  // --- STATS ---
-  const totalValue = products.reduce((sum, p) => {
-    const productStock = batches
-      .filter(b => b.product_id === p.id)
-      .reduce((s, b) => s + b.quantity, 0);
-    return sum + (productStock * p.price);
-  }, 0);
-
-  const now = new Date();
-  const expiringBatches = batches.filter(batch => {
-    const expiryDate = new Date(batch.expiry_date);
-    return isWithinInterval(expiryDate, { start: now, end: addDays(now, 7) });
-  });
-
+  // --- STATS (Simplified for Products Only) ---
+  const totalValue = products.reduce((sum, p) => sum + ((p.price || 0) * (p.quantity || 0)), 0);
+  const lowStockCount = products.filter(p => (p.quantity || 0) <= (p.reorderPoint || 10)).length;
   const recentActivity = auditLogs.slice(0, 10);
 
   // --- DELETE ALL DATA ---
@@ -66,7 +41,7 @@ const Admin = () => {
 
     if (
       window.confirm("⚠️ DANGER: Are you sure you want to delete ALL data?") &&
-      window.confirm("This action cannot be undone. All products, batches, and logs will be lost forever. Proceed?")
+      window.confirm("This action cannot be undone. All products and logs will be lost forever. Proceed?")
     ) {
       setIsClearing(true);
       await clearAllData();
@@ -74,7 +49,7 @@ const Admin = () => {
     }
   };
 
-  // --- IMPORT LOGIC ---
+  // --- IMPORT LOGIC (Simplified) ---
   const handleImportClick = () => {
     if (!isAdmin) {
       toast.error("Access Denied", { description: "Only the Admin account can import inventory." });
@@ -98,75 +73,41 @@ const Admin = () => {
 
         toast.info("Importing...", { description: `Processing ${jsonData.length} rows.` });
 
-        const productsToUpsert: any[] = [];
-        const excelBatches: any[] = [];
+        let successCount = 0;
 
-        const getValue = (row: any, key: string) => {
-          const foundKey = Object.keys(row).find(k => k.toLowerCase() === key.toLowerCase());
-          return foundKey ? row[foundKey] : undefined;
-        };
-
+        // Process each row
         for (const row of jsonData as any[]) {
-          const sku = getValue(row, 'sku');
-          const name = getValue(row, 'name') || getValue(row, 'product name');
-          const price = getValue(row, 'price');
+          // Flexible key matching (case-insensitive)
+          const getValue = (key: string) => {
+            const foundKey = Object.keys(row).find(k => k.toLowerCase().includes(key));
+            return foundKey ? row[foundKey] : undefined;
+          };
+
+          const sku = getValue('sku');
+          const name = getValue('name') || getValue('product');
+          const price = getValue('price');
+          const quantity = getValue('qty') || getValue('quantity') || 0;
 
           if (sku && name) {
-            productsToUpsert.push({
-              sku: String(sku),
-              name: String(name),
-              price: Number(price) || 0,
-              barcodes: [String(sku)],
-              image_url: null,
-              updated_at: new Date().toISOString()
-            });
+            // Check if product exists to avoid duplicates (optional logic)
+            const exists = products.find(p => p.sku === String(sku));
 
-            const quantity = getValue(row, 'quantity') || getValue(row, 'qty');
-            const expiry = getValue(row, 'expiry') || getValue(row, 'date');
-
-            if (Number(quantity) > 0) {
-              excelBatches.push({
+            if (!exists) {
+              await addProduct({
                 sku: String(sku),
+                name: String(name),
+                price: Number(price) || 0,
                 quantity: Number(quantity),
-                expiry_date: expiry ? new Date(expiry).toISOString() : new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString(),
-                batch_code: `IMP-${format(new Date(), 'yyyyMMdd')}`
+                category: 'Imported',
+                reorderPoint: 10
               });
+              successCount++;
             }
           }
         }
 
-        // Bulk Upsert Products
-        const { data: upsertedProducts, error: productError } = await supabase
-          .from('products')
-          .upsert(productsToUpsert, { onConflict: 'sku' })
-          .select('id, sku');
-
-        if (productError) throw productError;
-        if (!upsertedProducts) throw new Error("Database error");
-
-        const skuToIdMap = new Map(upsertedProducts.map(p => [p.sku, p.id]));
-
-        // Prepare Batches
-        const batchesToInsert = excelBatches
-          .map(b => {
-            const pid = skuToIdMap.get(b.sku);
-            if (!pid) return null;
-            return {
-              product_id: pid,
-              quantity: b.quantity,
-              expiry_date: b.expiry_date,
-              batch_code: b.batch_code
-            };
-          })
-          .filter(b => b !== null);
-
-        if (batchesToInsert.length > 0) {
-          const { error: batchError } = await supabase.from('batches').insert(batchesToInsert);
-          if (batchError) throw batchError;
-        }
-
-        toast.success("Import Complete!", { description: `Processed ${jsonData.length} rows.` });
-        refreshData();
+        toast.success("Import Complete!", { description: `Added ${successCount} new products.` });
+        if (fetchProducts) fetchProducts();
 
       } catch (error: any) {
         console.error(error);
@@ -182,61 +123,59 @@ const Admin = () => {
   // --- EXPORT LOGIC ---
   const exportInventoryReport = () => {
     try {
-      const data = products.map(product => {
-        const productBatches = batches.filter(b => b.product_id === product.id);
-        const totalQty = productBatches.reduce((sum, b) => sum + b.quantity, 0);
-        return {
-          'Product': product.name,
-          'SKU': product.sku,
-          'Price': product.price,
-          'Total Qty': totalQty,
-          'Value': totalQty * product.price,
-        };
-      });
+      const data = products.map(product => ({
+        'Product': product.name,
+        'SKU': product.sku,
+        'Category': product.category || '-',
+        'Price': product.price,
+        'Quantity': product.quantity || 0,
+        'Total Value': (product.price || 0) * (product.quantity || 0),
+      }));
 
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
-      XLSX.writeFile(wb, `inventory-report-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
-      toast.success('Report exported');
+      XLSX.writeFile(wb, `inventory-report-${new Date().toISOString().split('T')[0]}.xlsx`);
+      toast.success('Report exported successfully');
     } catch (error) { toast.error('Failed to export'); }
   };
 
   const getActionColor = (action: string) => {
     switch (action) {
-      case 'SCAN_IN': return 'bg-success/10 text-success';
-      case 'SCAN_OUT': return 'bg-warning/10 text-warning';
-      case 'ADJUST': return 'bg-primary/10 text-primary';
-      default: return 'bg-muted text-muted-foreground';
+      case 'SCAN_IN': return 'bg-green-100 text-green-700';
+      case 'SCAN_OUT': return 'bg-orange-100 text-orange-700';
+      case 'ADJUST': return 'bg-blue-100 text-blue-700';
+      case 'DELETE': return 'bg-red-100 text-red-700';
+      default: return 'bg-slate-100 text-slate-600';
     }
   };
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
+      <div className="space-y-6" dir="rtl">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold font-heading flex items-center gap-3">
-              <ShieldCheck className="w-8 h-8 text-primary" />
-              Admin Panel
+              <ShieldCheck className="w-8 h-8 text-blue-600" />
+              لوحة التحكم (Admin)
             </h1>
             <div className="text-muted-foreground mt-1 flex items-center gap-2">
-              <span>User:</span>
-              <span className="font-mono text-primary">{user?.email}</span>
-              {isAdmin && <Badge className="bg-primary">ADMIN</Badge>}
+              <span>المستخدم:</span>
+              <span className="font-mono text-blue-600">{user?.email}</span>
+              {isAdmin && <Badge className="bg-blue-600">مسؤول</Badge>}
             </div>
           </div>
         </div>
 
-        {/* Action Buttons (Import / Export / Delete) */}
-        <Card className="border-border/50">
+        {/* Action Buttons */}
+        <Card className="border-slate-200 shadow-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <FileSpreadsheet className="w-5 h-5 text-primary" />
-              Data Management
+              <FileSpreadsheet className="w-5 h-5 text-blue-600" />
+              إدارة البيانات
             </CardTitle>
             <CardDescription>
-              Manage system data, imports, and exports.
+              استيراد وتصدير البيانات أو حذف النظام بالكامل (خطر)
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-4 items-center">
@@ -244,28 +183,28 @@ const Admin = () => {
             <input type="file" ref={fileInputRef} onChange={processImport} className="hidden" accept=".xlsx,.xls,.csv" />
             <Button
               onClick={handleImportClick}
-              className={isAdmin ? "gradient-primary" : "opacity-50 cursor-not-allowed"}
+              className={isAdmin ? "bg-blue-600 hover:bg-blue-700" : "opacity-50 cursor-not-allowed"}
               disabled={isImporting || isClearing}
             >
-              {isImporting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-              Import Excel
+              {isImporting ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <Upload className="w-4 h-4 ml-2" />}
+              استيراد Excel
             </Button>
 
             {/* Export */}
             <Button onClick={exportInventoryReport} variant="outline" disabled={isImporting || isClearing}>
-              <Download className="w-4 h-4 mr-2" />
-              Export Report
+              <Download className="w-4 h-4 ml-2" />
+              تصدير تقرير
             </Button>
 
             {/* DANGER: Clear Data */}
-            <div className="ml-auto">
+            <div className="mr-auto">
               <Button
                 onClick={handleClearAll}
                 variant="destructive"
                 disabled={isClearing || isImporting || !isAdmin}
               >
-                {isClearing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
-                Delete All Data
+                {isClearing ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <Trash2 className="w-4 h-4 ml-2" />}
+                حذف جميع البيانات
               </Button>
             </div>
           </CardContent>
@@ -273,59 +212,70 @@ const Admin = () => {
 
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className="border-border/50">
+          <Card className="border-slate-200">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Stock Value</CardTitle>
-              <DollarSign className="w-4 h-4 text-primary" />
+              <CardTitle className="text-sm font-medium text-slate-500">إجمالي قيمة المخزون</CardTitle>
+              <DollarSign className="w-4 h-4 text-green-600" />
             </CardHeader>
-            <CardContent><div className="text-3xl font-bold">${totalValue.toLocaleString()}</div></CardContent>
+            <CardContent><div className="text-3xl font-bold text-slate-800">{totalValue.toLocaleString()} ج.م</div></CardContent>
           </Card>
 
-          <Card className={`border-border/50 ${expiringBatches.length > 0 ? 'ring-2 ring-warning/50' : ''}`}>
+          <Card className={`border-slate-200 ${lowStockCount > 0 ? 'border-orange-200 bg-orange-50' : ''}`}>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Expiring Soon</CardTitle>
-              <AlertTriangle className="w-4 h-4 text-yellow-500" />
+              <CardTitle className="text-sm font-medium text-slate-500">نواقص (مخزون منخفض)</CardTitle>
+              <AlertTriangle className={`w-4 h-4 ${lowStockCount > 0 ? 'text-orange-600' : 'text-slate-400'}`} />
             </CardHeader>
-            <CardContent><div className="text-3xl font-bold">{expiringBatches.length}</div></CardContent>
+            <CardContent><div className={`text-3xl font-bold ${lowStockCount > 0 ? 'text-orange-700' : 'text-slate-800'}`}>{lowStockCount}</div></CardContent>
           </Card>
 
-          <Card className="border-border/50">
+          <Card className="border-slate-200">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Recent Actions</CardTitle>
-              <Activity className="w-4 h-4 text-primary" />
+              <CardTitle className="text-sm font-medium text-slate-500">إجمالي المنتجات</CardTitle>
+              <Box className="w-4 h-4 text-blue-600" />
             </CardHeader>
-            <CardContent><div className="text-3xl font-bold">{auditLogs.length}</div></CardContent>
+            <CardContent><div className="text-3xl font-bold text-slate-800">{products.length}</div></CardContent>
           </Card>
         </div>
 
         {/* Activity Table */}
-        <Card className="border-border/50">
+        <Card className="border-slate-200 shadow-sm">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2"><Activity className="w-5 h-5 text-primary" /> Recent Activity</CardTitle>
+            <CardTitle className="flex items-center gap-2"><Activity className="w-5 h-5 text-blue-600" /> سجل النشاطات الحديثة</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Time</TableHead>
-                  <TableHead>User</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Details</TableHead>
+                  <TableHead className="text-right">التوقيت</TableHead>
+                  <TableHead className="text-right">المستخدم</TableHead>
+                  <TableHead className="text-right">الإجراء</TableHead>
+                  <TableHead className="text-right">التفاصيل</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {recentActivity.map(log => {
-                  const details = log.details as any;
-                  return (
-                    <TableRow key={log.id}>
-                      <TableCell className="font-mono text-sm">{format(new Date(log.created_at), 'MMM d, HH:mm')}</TableCell>
-                      <TableCell className="text-sm">{log.user_email}</TableCell>
-                      <TableCell><Badge className={getActionColor(log.action)}>{log.action}</Badge></TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{details?.product_name || 'Item'} ({details?.quantity_added || details?.quantity_removed || 0})</TableCell>
-                    </TableRow>
-                  );
-                })
-                }
+                {recentActivity.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center py-8 text-slate-500">لا يوجد نشاطات مسجلة</TableCell>
+                  </TableRow>
+                ) : (
+                  recentActivity.map(log => {
+                    const details = log.details as any;
+                    return (
+                      <TableRow key={log.id}>
+                        <TableCell className="font-mono text-sm" dir="ltr" className="text-right">
+                          {new Date(log.created_at).toLocaleString('ar-EG')}
+                        </TableCell>
+                        <TableCell className="text-sm">{log.user_email}</TableCell>
+                        <TableCell><Badge className={getActionColor(log.action)}>{log.action}</Badge></TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {details?.product_name || details?.name || 'منتج'}
+                          {details?.quantity_added ? ` (+${details.quantity_added})` : ''}
+                          {details?.quantity_removed ? ` (-${details.quantity_removed})` : ''}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
               </TableBody>
             </Table>
           </CardContent>
