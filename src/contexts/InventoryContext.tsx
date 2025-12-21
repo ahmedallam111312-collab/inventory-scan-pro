@@ -23,10 +23,8 @@ export interface AuditLog {
   details: any;
 }
 
-// FIXED: Added 'batches' back to the type definition to prevent TS errors
 interface InventoryContextType {
   products: Product[];
-  batches: any[]; // Placeholder for legacy code
   auditLogs: AuditLog[];
   loading: boolean;
   addProduct: (product: any) => Promise<any>;
@@ -36,6 +34,7 @@ interface InventoryContextType {
   scanOut: (productId: string, quantity: number) => Promise<void>;
   getTotalStock: (productId: string) => number;
   fetchProducts: () => Promise<void>;
+  clearAllData: () => Promise<void>; // Ensure this is here
 }
 
 const InventoryContext = createContext<InventoryContextType | undefined>(undefined);
@@ -47,7 +46,6 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const fetchProducts = useCallback(async () => {
     try {
-      // Fetch 10,000 items (Supabase default is 1000)
       const { data, error } = await supabase
         .from('products')
         .select('*')
@@ -76,7 +74,6 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return () => { supabase.removeChannel(channel); };
   }, [fetchProducts]);
 
-  // Logging Helper
   const logAction = async (action: string, details: any) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user?.email) {
@@ -84,7 +81,6 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
-  // Actions
   const addProduct = async (product: any) => {
     const { data, error } = await supabase.from('products').insert(product).select().single();
     if (error) { toast.error('Error adding product'); throw error; }
@@ -107,7 +103,6 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const product = products.find(p => p.id === productId);
     if (!product) return;
     const newQty = (product.quantity || 0) + quantityToAdd;
-
     try {
       await updateProduct(productId, { quantity: newQty });
       await logAction('SCAN_IN', { name: product.name, added: quantityToAdd, new: newQty });
@@ -119,13 +114,11 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const product = products.find(p => p.id === productId);
     if (!product) return;
     const currentQty = product.quantity || 0;
-
     if (currentQty < quantityToRemove) {
-      toast.error("الكمية غير كافية!");
+      toast.error("Insufficient stock!");
       return;
     }
     const newQty = currentQty - quantityToRemove;
-
     try {
       await updateProduct(productId, { quantity: newQty });
       await logAction('SCAN_OUT', { name: product.name, removed: quantityToRemove, new: newQty });
@@ -138,14 +131,33 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return product ? (product.quantity || 0) : 0;
   };
 
+  // --- SAFE CLEAR FUNCTION ---
+  const clearAllData = async () => {
+    try {
+      // 1. Delete Audit Logs first (to avoid reference errors)
+      await supabase.from('audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+
+      // 2. Delete Products
+      const { error } = await supabase.from('products').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+
+      if (error) throw error;
+
+      // 3. Reset Local State explicitly
+      setProducts([]);
+      setAuditLogs([]);
+
+      toast.success('تم حذف جميع البيانات بنجاح');
+    } catch (error: any) {
+      console.error(error);
+      toast.error('حدث خطأ أثناء الحذف');
+    }
+  };
+
   return (
     <InventoryContext.Provider value={{
-      products,
-      batches: [], // FIXED: Empty array prevents "undefined" crashes in legacy code
-      auditLogs,
-      loading,
+      products, auditLogs, loading,
       addProduct, updateProduct, deleteProduct,
-      scanIn, scanOut, getTotalStock, fetchProducts
+      scanIn, scanOut, getTotalStock, fetchProducts, clearAllData
     }}>
       {children}
     </InventoryContext.Provider>

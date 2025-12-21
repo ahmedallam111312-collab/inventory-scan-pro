@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { useInventory } from '@/contexts/InventoryContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client'; // Need direct access for Bulk Upsert
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -19,7 +20,7 @@ import { toast } from 'sonner';
 const ADMIN_EMAIL = "ahmedallam111312@gmail.com";
 
 const Admin = () => {
-  const { products, auditLogs, fetchProducts, clearAllData, addProduct } = useInventory();
+  const { products, auditLogs, fetchProducts, clearAllData } = useInventory();
   const { user } = useAuth();
   const [isImporting, setIsImporting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -27,32 +28,37 @@ const Admin = () => {
 
   const isAdmin = user?.email === ADMIN_EMAIL;
 
-  // --- STATS (Simplified for Products Only) ---
+  // --- STATS ---
   const totalValue = products.reduce((sum, p) => sum + ((p.price || 0) * (p.quantity || 0)), 0);
   const lowStockCount = products.filter(p => (p.quantity || 0) <= (p.reorderPoint || 10)).length;
   const recentActivity = auditLogs.slice(0, 10);
 
-  // --- DELETE ALL DATA ---
+  // --- SAFE DELETE ALL ---
   const handleClearAll = async () => {
     if (!isAdmin) {
-      toast.error("Permission Denied", { description: "Only Admin can perform this action." });
+      toast.error("غير مصرح لك", { description: "فقط المسؤول يمكنه حذف البيانات" });
       return;
     }
 
     if (
-      window.confirm("⚠️ DANGER: Are you sure you want to delete ALL data?") &&
-      window.confirm("This action cannot be undone. All products and logs will be lost forever. Proceed?")
+      window.confirm("⚠️ تحذير: هل أنت متأكد من حذف جميع البيانات؟") &&
+      window.confirm("لا يمكن التراجع عن هذا الإجراء. سيتم حذف جميع المنتجات والسجلات.")
     ) {
-      setIsClearing(true);
-      await clearAllData();
-      setIsClearing(false);
+      try {
+        setIsClearing(true);
+        await clearAllData();
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setIsClearing(false); // Ensure spinner stops
+      }
     }
   };
 
-  // --- IMPORT LOGIC (Simplified) ---
+  // --- NEW BULK IMPORT LOGIC ---
   const handleImportClick = () => {
     if (!isAdmin) {
-      toast.error("Access Denied", { description: "Only the Admin account can import inventory." });
+      toast.error("غير مصرح لك", { description: "فقط المسؤول يمكنه استيراد البيانات" });
       return;
     }
     fileInputRef.current?.click();
@@ -71,13 +77,13 @@ const Admin = () => {
         const workbook = XLSX.read(data, { type: 'array' });
         const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 
-        toast.info("Importing...", { description: `Processing ${jsonData.length} rows.` });
+        toast.info("جاري الاستيراد...", { description: `جاري معالجة ${jsonData.length} منتج.` });
 
-        let successCount = 0;
+        // Prepare data for Bulk Upsert
+        const productsToUpsert = [];
 
-        // Process each row
         for (const row of jsonData as any[]) {
-          // Flexible key matching (case-insensitive)
+          // Flexible key matching
           const getValue = (key: string) => {
             const foundKey = Object.keys(row).find(k => k.toLowerCase().includes(key));
             return foundKey ? row[foundKey] : undefined;
@@ -89,29 +95,38 @@ const Admin = () => {
           const quantity = getValue('qty') || getValue('quantity') || 0;
 
           if (sku && name) {
-            // Check if product exists to avoid duplicates (optional logic)
-            const exists = products.find(p => p.sku === String(sku));
-
-            if (!exists) {
-              await addProduct({
-                sku: String(sku),
-                name: String(name),
-                price: Number(price) || 0,
-                quantity: Number(quantity),
-                category: 'Imported',
-                reorderPoint: 10
-              });
-              successCount++;
-            }
+            productsToUpsert.push({
+              sku: String(sku).trim(), // Clean spaces
+              name: String(name).trim(),
+              price: Number(price) || 0,
+              quantity: Number(quantity),
+              category: 'Imported',
+              reorderPoint: 10
+            });
           }
         }
 
-        toast.success("Import Complete!", { description: `Added ${successCount} new products.` });
-        if (fetchProducts) fetchProducts();
+        if (productsToUpsert.length === 0) {
+          toast.warning("الملف فارغ أو التنسيق غير صحيح");
+          setIsImporting(false);
+          return;
+        }
+
+        // --- THE FIX: USE UPSERT (Update if exists, Insert if new) ---
+        const { error } = await supabase
+          .from('products')
+          .upsert(productsToUpsert, { onConflict: 'sku' }); // Ensure 'sku' is unique in DB settings
+
+        if (error) throw error;
+
+        toast.success("تم الاستيراد بنجاح!", { description: `تم تحديث/إضافة ${productsToUpsert.length} منتج.` });
+
+        // Refresh UI
+        await fetchProducts();
 
       } catch (error: any) {
         console.error(error);
-        toast.error("Import Failed", { description: error.message });
+        toast.error("فشل الاستيراد", { description: error.message });
       } finally {
         setIsImporting(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -124,20 +139,20 @@ const Admin = () => {
   const exportInventoryReport = () => {
     try {
       const data = products.map(product => ({
-        'Product': product.name,
+        'المنتج': product.name,
         'SKU': product.sku,
-        'Category': product.category || '-',
-        'Price': product.price,
-        'Quantity': product.quantity || 0,
-        'Total Value': (product.price || 0) * (product.quantity || 0),
+        'التصنيف': product.category || '-',
+        'السعر': product.price,
+        'الكمية': product.quantity || 0,
+        'القيمة الإجمالية': (product.price || 0) * (product.quantity || 0),
       }));
 
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
       XLSX.writeFile(wb, `inventory-report-${new Date().toISOString().split('T')[0]}.xlsx`);
-      toast.success('Report exported successfully');
-    } catch (error) { toast.error('Failed to export'); }
+      toast.success('تم تصدير التقرير');
+    } catch (error) { toast.error('فشل التصدير'); }
   };
 
   const getActionColor = (action: string) => {
@@ -175,7 +190,7 @@ const Admin = () => {
               إدارة البيانات
             </CardTitle>
             <CardDescription>
-              استيراد وتصدير البيانات أو حذف النظام بالكامل (خطر)
+              استيراد وتصدير البيانات أو إعادة تعيين النظام
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-4 items-center">
