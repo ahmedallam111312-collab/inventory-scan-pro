@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useInventory } from '@/contexts/InventoryContext'; // CONNECTED TO REAL CONTEXT
+import { useInventory } from '@/contexts/InventoryContext';
+import DashboardLayout from '@/components/layout/DashboardLayout'; // ADDED THIS FOR SIDEBAR
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,12 +10,11 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   Scan, Search, Minus, Plus, Camera, CheckCircle2,
   History, TrendingUp, Package, AlertTriangle,
-  Download, Zap, Clock, BarChart3, X, ChevronRight, Loader2
+  Download, Zap, Clock, BarChart3, X, ChevronLeft, Loader2
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const Scanner = () => {
-  // 1. CONNECT TO REAL ENVIRONMENT
   const { products, updateProduct } = useInventory();
 
   // Core state
@@ -36,7 +36,6 @@ const Scanner = () => {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initialize audio context
   useEffect(() => {
@@ -178,11 +177,11 @@ const Scanner = () => {
       });
 
       updateQuickActions(found);
-      toast.success(`Found: ${found.name}`);
+      toast.success(`تم العثور على: ${found.name}`);
     } else {
       playSound('error');
       vibrate([100, 50, 100]);
-      toast.error(`Product not found: "${term}"`);
+      toast.error(`غير موجود: "${term}"`);
       setBarcode('');
     }
   }, [products, playSound, vibrate]);
@@ -210,7 +209,7 @@ const Scanner = () => {
     setIsProcessing(true);
 
     try {
-      const operation = activeTab === 'in' ? 'Added' : 'Removed';
+      const operationName = activeTab === 'in' ? 'تمت الإضافة' : 'تم الصرف';
       const currentQty = scannedProduct.quantity || 0;
 
       let newQuantity = currentQty;
@@ -220,7 +219,7 @@ const Scanner = () => {
       } else {
         newQuantity = currentQty - quantity;
         if (newQuantity < 0) {
-          toast.error("Insufficient stock!");
+          toast.error("عفواً! المخزون غير كافي");
           setIsProcessing(false);
           return;
         }
@@ -236,7 +235,7 @@ const Scanner = () => {
         operation: activeTab,
         quantity,
         timestamp: new Date().toISOString(),
-        user: 'Current User'
+        user: 'المستخدم الحالي'
       };
 
       const newHistory = [historyEntry, ...scanHistory].slice(0, 100);
@@ -247,7 +246,7 @@ const Scanner = () => {
 
       playSound('success');
       vibrate([50, 100, 50]);
-      toast.success(`${operation} successfully`, {
+      toast.success(`${operationName} بنجاح`, {
         description: `${quantity} × ${scannedProduct.name}`
       });
 
@@ -258,7 +257,7 @@ const Scanner = () => {
       }
     } catch (error: any) {
       playSound('error');
-      toast.error('Error', { description: error.message });
+      toast.error('حدث خطأ', { description: error.message });
     } finally {
       setIsProcessing(false);
     }
@@ -287,16 +286,16 @@ const Scanner = () => {
     const csv = [
       ['Timestamp', 'Product', 'SKU', 'Operation', 'Quantity', 'User'],
       ...scanHistory.map(h => [
-        new Date(h.timestamp).toLocaleString(),
+        new Date(h.timestamp).toLocaleString('ar-EG'),
         h.product.name,
         h.product.sku,
-        h.operation === 'in' ? 'In' : 'Out',
+        h.operation === 'in' ? 'إضافة' : 'صرف',
         h.quantity,
         h.user
       ])
     ].map(row => row.join(',')).join('\n');
 
-    const blob = new Blob([csv], { type: 'text/csv' });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -306,9 +305,18 @@ const Scanner = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-4">
-      <div className="max-w-6xl mx-auto space-y-4">
-        {/* Header */}
+    <DashboardLayout>
+      <div className="space-y-6" dir="rtl">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold font-heading">الماسح الضوئي</h1>
+            <p className="text-muted-foreground mt-1">
+              إدارة حركة المخزون (إضافة / صرف)
+            </p>
+          </div>
+        </div>
+
+        {/* Header Stats */}
         <Card className="border-2 border-blue-200 shadow-lg">
           <CardHeader className="pb-4">
             <div className="flex items-center justify-between">
@@ -317,8 +325,7 @@ const Scanner = () => {
                   <Scan className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <CardTitle className="text-2xl">Pro Scanner</CardTitle>
-                  <p className="text-sm text-slate-500 mt-1">Inventory Management System</p>
+                  <CardTitle className="text-2xl">الماسح الاحترافي</CardTitle>
                 </div>
               </div>
 
@@ -330,7 +337,7 @@ const Scanner = () => {
                   className="gap-2"
                 >
                   <BarChart3 className="w-4 h-4" />
-                  Stats
+                  الإحصائيات
                 </Button>
                 <Button
                   variant="outline"
@@ -339,7 +346,7 @@ const Scanner = () => {
                   className="gap-2"
                 >
                   <Download className="w-4 h-4" />
-                  Export
+                  تصدير
                 </Button>
               </div>
             </div>
@@ -354,7 +361,7 @@ const Scanner = () => {
                 <div className="bg-blue-50 p-4 rounded-lg">
                   <div className="flex items-center gap-2 text-blue-600 mb-1">
                     <TrendingUp className="w-4 h-4" />
-                    <span className="text-sm font-medium">Total Scans</span>
+                    <span className="text-sm font-medium">إجمالي العمليات</span>
                   </div>
                   <p className="text-2xl font-bold">{stats.totalScans}</p>
                 </div>
@@ -362,7 +369,7 @@ const Scanner = () => {
                 <div className="bg-green-50 p-4 rounded-lg">
                   <div className="flex items-center gap-2 text-green-600 mb-1">
                     <Clock className="w-4 h-4" />
-                    <span className="text-sm font-medium">Today</span>
+                    <span className="text-sm font-medium">اليوم</span>
                   </div>
                   <p className="text-2xl font-bold">{stats.todayScans}</p>
                 </div>
@@ -370,7 +377,7 @@ const Scanner = () => {
                 <div className="bg-emerald-50 p-4 rounded-lg">
                   <div className="flex items-center gap-2 text-emerald-600 mb-1">
                     <Plus className="w-4 h-4" />
-                    <span className="text-sm font-medium">Added</span>
+                    <span className="text-sm font-medium">إضافة</span>
                   </div>
                   <p className="text-2xl font-bold">{stats.totalIn}</p>
                 </div>
@@ -378,7 +385,7 @@ const Scanner = () => {
                 <div className="bg-orange-50 p-4 rounded-lg">
                   <div className="flex items-center gap-2 text-orange-600 mb-1">
                     <Minus className="w-4 h-4" />
-                    <span className="text-sm font-medium">Removed</span>
+                    <span className="text-sm font-medium">صرف</span>
                   </div>
                   <p className="text-2xl font-bold">{stats.totalOut}</p>
                 </div>
@@ -396,24 +403,24 @@ const Scanner = () => {
                   <TabsList className="grid w-full grid-cols-2 mb-6">
                     <TabsTrigger value="in" className="gap-2">
                       <Plus className="w-4 h-4" />
-                      Scan In (+)
+                      إضافة (+)
                     </TabsTrigger>
                     <TabsTrigger value="out" className="gap-2">
                       <Minus className="w-4 h-4" />
-                      Scan Out (-)
+                      صرف (-)
                     </TabsTrigger>
                   </TabsList>
 
                   <TabsContent value={activeTab} className="space-y-4">
-                    {/* Camera View - PLACEHOLDER UI */}
+                    {/* Camera View */}
                     {isCameraOpen && (
                       <div className="relative bg-black rounded-lg overflow-hidden" style={{ height: '400px' }}>
                         <div className="absolute inset-0 flex items-center justify-center">
                           <div className="text-center text-white p-8">
                             <Camera className="w-16 h-16 mx-auto mb-4 animate-pulse" />
-                            <p className="text-lg mb-2">Point camera at barcode</p>
+                            <p className="text-lg mb-2">وجه الكاميرا نحو الباركود</p>
                             <p className="text-sm text-slate-300">
-                              Continuous Scan: {continuousScan ? 'On' : 'Off'}
+                              المسح المستمر: {continuousScan ? 'مفعل' : 'معطل'}
                             </p>
                           </div>
                         </div>
@@ -425,13 +432,13 @@ const Scanner = () => {
                             className="gap-2"
                           >
                             <Zap className="w-4 h-4" />
-                            {continuousScan ? 'Disable' : 'Enable'} Continuous
+                            {continuousScan ? 'تعطيل' : 'تفعيل'} المستمر
                           </Button>
                           <Button
                             variant="secondary"
                             onClick={() => setIsCameraOpen(false)}
                           >
-                            Close Camera
+                            إغلاق الكاميرا
                           </Button>
                         </div>
                       </div>
@@ -449,11 +456,11 @@ const Scanner = () => {
                                 setBarcode(e.target.value);
                                 updateSearchSuggestions(e.target.value);
                               }}
-                              placeholder="Scan or type product SKU/Name (Ctrl+K)..."
-                              className="text-lg h-14 pr-12"
+                              placeholder="امسح أو اكتب كود المنتج..."
+                              className="text-lg h-14 pr-12 text-right"
                               autoFocus
                             />
-                            <Search className="absolute right-4 top-4 w-5 h-5 text-slate-400" />
+                            <Search className="absolute left-4 top-4 w-5 h-5 text-slate-400" />
                           </div>
 
                           {/* Search Suggestions */}
@@ -465,7 +472,7 @@ const Scanner = () => {
                                     key={product.id}
                                     type="button"
                                     onClick={() => findProduct(product.sku)}
-                                    className="w-full text-left p-3 hover:bg-slate-50 rounded-lg transition-colors flex items-center justify-between"
+                                    className="w-full text-right p-3 hover:bg-slate-50 rounded-lg transition-colors flex items-center justify-between"
                                   >
                                     <div className="flex items-center gap-3">
                                       <Badge variant="secondary">{product.sku}</Badge>
@@ -474,7 +481,7 @@ const Scanner = () => {
                                       </div>
                                     </div>
                                     <p className="text-sm text-slate-500">
-                                      Stock: {product.quantity || 0}
+                                      مخزون: {product.quantity || 0}
                                     </p>
                                   </button>
                                 ))}
@@ -485,7 +492,7 @@ const Scanner = () => {
                           <div className="flex gap-2">
                             <Button type="submit" className="flex-1 h-12 text-lg gap-2">
                               <Search className="w-5 h-5" />
-                              Search
+                              بحث
                             </Button>
                             <Button
                               type="button"
@@ -494,7 +501,7 @@ const Scanner = () => {
                               variant="outline"
                             >
                               <Camera className="w-5 h-5" />
-                              Camera
+                              كاميرا
                             </Button>
                           </div>
                         </form>
@@ -504,20 +511,20 @@ const Scanner = () => {
                           <div className="pt-4 border-t">
                             <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
                               <History className="w-4 h-4" />
-                              Recent Scans
+                              عمليات مسح حديثة
                             </h3>
                             <div className="space-y-2">
                               {recentScans.map(product => (
                                 <button
                                   key={product.id}
                                   onClick={() => findProduct(product.sku)}
-                                  className="w-full text-left p-3 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors flex items-center justify-between"
+                                  className="w-full text-right p-3 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors flex items-center justify-between"
                                 >
                                   <div>
                                     <p className="font-medium text-sm">{product.name}</p>
                                     <p className="text-xs text-slate-500">{product.sku}</p>
                                   </div>
-                                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                                  <ChevronLeft className="w-4 h-4 text-slate-400" />
                                 </button>
                               ))}
                             </div>
@@ -547,7 +554,7 @@ const Scanner = () => {
                                 className="gap-2"
                               >
                                 <X className="w-4 h-4" />
-                                Cancel
+                                إلغاء
                               </Button>
                             </div>
                           </AlertDescription>
@@ -556,9 +563,9 @@ const Scanner = () => {
                         <div className="grid grid-cols-2 gap-4">
                           <Card className="bg-blue-50 border-blue-200">
                             <CardContent className="pt-4 text-center">
-                              <p className="text-sm text-slate-600 mb-1">Price</p>
+                              <p className="text-sm text-slate-600 mb-1">السعر</p>
                               <p className="text-2xl font-bold text-blue-600">
-                                ${scannedProduct.price}
+                                {scannedProduct.price} ج.م
                               </p>
                             </CardContent>
                           </Card>
@@ -572,7 +579,7 @@ const Scanner = () => {
                                 {(scannedProduct.quantity || 0) <= 10 && (
                                   <AlertTriangle className="w-4 h-4 text-orange-500" />
                                 )}
-                                <p className="text-sm text-slate-600">Current Stock</p>
+                                <p className="text-sm text-slate-600">المخزون الحالي</p>
                               </div>
                               <p className={`text-2xl font-bold ${(scannedProduct.quantity || 0) <= 10
                                 ? 'text-orange-600'
@@ -598,7 +605,7 @@ const Scanner = () => {
                               </Button>
 
                               <div className="text-center">
-                                <p className="text-sm text-slate-600 mb-2">Quantity</p>
+                                <p className="text-sm text-slate-600 mb-2">الكمية</p>
                                 <p className="text-4xl font-bold">{quantity}</p>
                               </div>
 
@@ -635,12 +642,12 @@ const Scanner = () => {
                               {isProcessing ? (
                                 <>
                                   <Loader2 className="w-5 h-5 animate-spin" />
-                                  Processing...
+                                  جاري المعالجة...
                                 </>
                               ) : (
                                 <>
                                   <CheckCircle2 className="w-5 h-5" />
-                                  Confirm {activeTab === 'in' ? 'Scan In' : 'Scan Out'} (Enter)
+                                  تأكيد {activeTab === 'in' ? 'الإضافة' : 'الصرف'} (Enter)
                                 </>
                               )}
                             </Button>
@@ -660,13 +667,13 @@ const Scanner = () => {
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
                   <History className="w-5 h-5" />
-                  History
+                  السجل
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 max-h-[600px] overflow-y-auto">
                 {scanHistory.length === 0 ? (
                   <p className="text-center text-slate-500 py-8 text-sm">
-                    No recent scans
+                    لا يوجد عمليات حديثة
                   </p>
                 ) : (
                   scanHistory.slice(0, 20).map((item) => (
@@ -689,8 +696,8 @@ const Scanner = () => {
                           <p className="text-xs text-slate-500">{item.product.sku}</p>
                         </div>
                       </div>
-                      <p className="text-xs text-slate-500 text-right">
-                        {new Date(item.timestamp).toLocaleString()}
+                      <p className="text-xs text-slate-500 text-left" dir="ltr">
+                        {new Date(item.timestamp).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
                       </p>
                     </div>
                   ))
@@ -701,41 +708,41 @@ const Scanner = () => {
             {/* Settings */}
             <Card className="border-slate-200">
               <CardHeader>
-                <CardTitle className="text-lg">Settings</CardTitle>
+                <CardTitle className="text-lg">الإعدادات</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm">Sound Effects</span>
+                  <span className="text-sm">الأصوات</span>
                   <button
                     onClick={() => setSoundEnabled(!soundEnabled)}
                     className={`w-12 h-6 rounded-full transition-colors ${soundEnabled ? 'bg-blue-500' : 'bg-slate-300'
                       }`}
                   >
                     <div
-                      className={`w-5 h-5 bg-white rounded-full transition-transform ${soundEnabled ? 'translate-x-6' : 'translate-x-1'
+                      className={`w-5 h-5 bg-white rounded-full transition-transform ${soundEnabled ? '-translate-x-6' : '-translate-x-1'
                         }`}
                     />
                   </button>
                 </div>
 
                 <div className="pt-2 border-t">
-                  <p className="text-xs text-slate-500 mb-2">Shortcuts</p>
+                  <p className="text-xs text-slate-500 mb-2">الاختصارات</p>
                   <div className="space-y-1 text-xs">
                     <div className="flex justify-between">
                       <span className="text-slate-600">Ctrl+K</span>
-                      <span>Focus Search</span>
+                      <span>البحث</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-600">Ctrl+C</span>
-                      <span>Open Camera</span>
+                      <span>الكاميرا</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-600">Enter</span>
-                      <span>Confirm</span>
+                      <span>تأكيد</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-600">Esc</span>
-                      <span>Cancel</span>
+                      <span>إلغاء</span>
                     </div>
                   </div>
                 </div>
@@ -744,7 +751,7 @@ const Scanner = () => {
           </div>
         </div>
       </div>
-    </div>
+    </DashboardLayout>
   );
 };
 
