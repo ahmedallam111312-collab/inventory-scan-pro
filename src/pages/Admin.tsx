@@ -19,7 +19,9 @@ import { toast } from 'sonner';
 const ADMIN_EMAIL = "ahmedallam111312@gmail.com";
 
 const Admin = () => {
-  const { products, auditLogs, fetchProducts, clearAllData, addProduct } = useInventory();
+  // FIXED: Added " = []" defaults. This stops the "undefined reading reduce" crash.
+  const { products = [], auditLogs = [], fetchProducts, clearAllData, addProduct } = useInventory();
+
   const { user } = useAuth();
   const [isImporting, setIsImporting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -27,11 +29,19 @@ const Admin = () => {
 
   const isAdmin = user?.email === ADMIN_EMAIL;
 
-  // --- STATS (CRASH FIX: Added || [] to handle empty data) ---
+  // --- STATS ---
   const stats = useMemo(() => {
+    // Extra safety check
     const safeProducts = products || [];
-    const totalVal = safeProducts.reduce((sum, p) => sum + ((p.price || 0) * (p.quantity || 0)), 0);
-    const lowStock = safeProducts.filter(p => (p.quantity || 0) <= (p.reorderPoint || 10)).length;
+
+    const totalVal = safeProducts.reduce((sum, p) => {
+      const price = Number(p.price) || 0;
+      const qty = Number(p.quantity) || 0;
+      return sum + (price * qty);
+    }, 0);
+
+    const lowStock = safeProducts.filter(p => (Number(p.quantity) || 0) <= (p.reorderPoint || 10)).length;
+
     return { totalVal, lowStock, count: safeProducts.length };
   }, [products]);
 
@@ -130,7 +140,7 @@ const Admin = () => {
         'Category': product.category || '-',
         'Price': product.price,
         'Quantity': product.quantity || 0,
-        'Total Value': (product.price || 0) * (product.quantity || 0),
+        'Total Value': (Number(product.price) || 0) * (Number(product.quantity) || 0),
       }));
 
       const ws = XLSX.utils.json_to_sheet(data);
