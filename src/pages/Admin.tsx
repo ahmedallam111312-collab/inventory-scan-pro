@@ -1,7 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useMemo } from 'react';
 import { useInventory } from '@/contexts/InventoryContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/integrations/supabase/client'; // Need direct access for Bulk Upsert
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -20,7 +19,7 @@ import { toast } from 'sonner';
 const ADMIN_EMAIL = "ahmedallam111312@gmail.com";
 
 const Admin = () => {
-  const { products, auditLogs, fetchProducts, clearAllData } = useInventory();
+  const { products, auditLogs, fetchProducts, clearAllData, addProduct } = useInventory();
   const { user } = useAuth();
   const [isImporting, setIsImporting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -28,37 +27,37 @@ const Admin = () => {
 
   const isAdmin = user?.email === ADMIN_EMAIL;
 
-  // --- STATS ---
-  const totalValue = products.reduce((sum, p) => sum + ((p.price || 0) * (p.quantity || 0)), 0);
-  const lowStockCount = products.filter(p => (p.quantity || 0) <= (p.reorderPoint || 10)).length;
-  const recentActivity = auditLogs.slice(0, 10);
+  // --- STATS (CRASH FIX: Added || [] to handle empty data) ---
+  const stats = useMemo(() => {
+    const safeProducts = products || [];
+    const totalVal = safeProducts.reduce((sum, p) => sum + ((p.price || 0) * (p.quantity || 0)), 0);
+    const lowStock = safeProducts.filter(p => (p.quantity || 0) <= (p.reorderPoint || 10)).length;
+    return { totalVal, lowStock, count: safeProducts.length };
+  }, [products]);
 
-  // --- SAFE DELETE ALL ---
+  const recentActivity = (auditLogs || []).slice(0, 10);
+
+  // --- DELETE ALL DATA ---
   const handleClearAll = async () => {
     if (!isAdmin) {
-      toast.error("غير مصرح لك", { description: "فقط المسؤول يمكنه حذف البيانات" });
+      toast.error("Permission Denied", { description: "Only Admin can perform this action." });
       return;
     }
 
     if (
-      window.confirm("⚠️ تحذير: هل أنت متأكد من حذف جميع البيانات؟") &&
-      window.confirm("لا يمكن التراجع عن هذا الإجراء. سيتم حذف جميع المنتجات والسجلات.")
+      window.confirm("⚠️ DANGER: Are you sure you want to delete ALL data?") &&
+      window.confirm("This action cannot be undone. All products and logs will be lost forever. Proceed?")
     ) {
-      try {
-        setIsClearing(true);
-        await clearAllData();
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setIsClearing(false); // Ensure spinner stops
-      }
+      setIsClearing(true);
+      await clearAllData();
+      setIsClearing(false);
     }
   };
 
-  // --- NEW BULK IMPORT LOGIC ---
+  // --- IMPORT LOGIC ---
   const handleImportClick = () => {
     if (!isAdmin) {
-      toast.error("غير مصرح لك", { description: "فقط المسؤول يمكنه استيراد البيانات" });
+      toast.error("Access Denied", { description: "Only the Admin account can import inventory." });
       return;
     }
     fileInputRef.current?.click();
@@ -77,13 +76,11 @@ const Admin = () => {
         const workbook = XLSX.read(data, { type: 'array' });
         const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 
-        toast.info("جاري الاستيراد...", { description: `جاري معالجة ${jsonData.length} منتج.` });
+        toast.info("Importing...", { description: `Processing ${jsonData.length} rows.` });
 
-        // Prepare data for Bulk Upsert
-        const productsToUpsert = [];
+        let successCount = 0;
 
         for (const row of jsonData as any[]) {
-          // Flexible key matching
           const getValue = (key: string) => {
             const foundKey = Object.keys(row).find(k => k.toLowerCase().includes(key));
             return foundKey ? row[foundKey] : undefined;
@@ -95,38 +92,27 @@ const Admin = () => {
           const quantity = getValue('qty') || getValue('quantity') || 0;
 
           if (sku && name) {
-            productsToUpsert.push({
-              sku: String(sku).trim(), // Clean spaces
-              name: String(name).trim(),
-              price: Number(price) || 0,
-              quantity: Number(quantity),
-              category: 'Imported',
-              reorderPoint: 10
-            });
+            const exists = (products || []).find(p => p.sku === String(sku));
+            if (!exists) {
+              await addProduct({
+                sku: String(sku),
+                name: String(name),
+                price: Number(price) || 0,
+                quantity: Number(quantity),
+                category: 'Imported',
+                reorderPoint: 10
+              });
+              successCount++;
+            }
           }
         }
 
-        if (productsToUpsert.length === 0) {
-          toast.warning("الملف فارغ أو التنسيق غير صحيح");
-          setIsImporting(false);
-          return;
-        }
-
-        // --- THE FIX: USE UPSERT (Update if exists, Insert if new) ---
-        const { error } = await supabase
-          .from('products')
-          .upsert(productsToUpsert, { onConflict: 'sku' }); // Ensure 'sku' is unique in DB settings
-
-        if (error) throw error;
-
-        toast.success("تم الاستيراد بنجاح!", { description: `تم تحديث/إضافة ${productsToUpsert.length} منتج.` });
-
-        // Refresh UI
-        await fetchProducts();
+        toast.success("Import Complete!", { description: `Added ${successCount} new products.` });
+        if (fetchProducts) fetchProducts();
 
       } catch (error: any) {
         console.error(error);
-        toast.error("فشل الاستيراد", { description: error.message });
+        toast.error("Import Failed", { description: error.message });
       } finally {
         setIsImporting(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -138,21 +124,21 @@ const Admin = () => {
   // --- EXPORT LOGIC ---
   const exportInventoryReport = () => {
     try {
-      const data = products.map(product => ({
-        'المنتج': product.name,
+      const data = (products || []).map(product => ({
+        'Product': product.name,
         'SKU': product.sku,
-        'التصنيف': product.category || '-',
-        'السعر': product.price,
-        'الكمية': product.quantity || 0,
-        'القيمة الإجمالية': (product.price || 0) * (product.quantity || 0),
+        'Category': product.category || '-',
+        'Price': product.price,
+        'Quantity': product.quantity || 0,
+        'Total Value': (product.price || 0) * (product.quantity || 0),
       }));
 
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
       XLSX.writeFile(wb, `inventory-report-${new Date().toISOString().split('T')[0]}.xlsx`);
-      toast.success('تم تصدير التقرير');
-    } catch (error) { toast.error('فشل التصدير'); }
+      toast.success('Report exported successfully');
+    } catch (error) { toast.error('Failed to export'); }
   };
 
   const getActionColor = (action: string) => {
@@ -190,7 +176,7 @@ const Admin = () => {
               إدارة البيانات
             </CardTitle>
             <CardDescription>
-              استيراد وتصدير البيانات أو إعادة تعيين النظام
+              استيراد وتصدير البيانات أو حذف النظام بالكامل (خطر)
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-4 items-center">
@@ -232,15 +218,15 @@ const Admin = () => {
               <CardTitle className="text-sm font-medium text-slate-500">إجمالي قيمة المخزون</CardTitle>
               <DollarSign className="w-4 h-4 text-green-600" />
             </CardHeader>
-            <CardContent><div className="text-3xl font-bold text-slate-800">{totalValue.toLocaleString()} ج.م</div></CardContent>
+            <CardContent><div className="text-3xl font-bold text-slate-800">{stats.totalVal.toLocaleString()} ج.م</div></CardContent>
           </Card>
 
-          <Card className={`border-slate-200 ${lowStockCount > 0 ? 'border-orange-200 bg-orange-50' : ''}`}>
+          <Card className={`border-slate-200 ${stats.lowStock > 0 ? 'border-orange-200 bg-orange-50' : ''}`}>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-slate-500">نواقص (مخزون منخفض)</CardTitle>
-              <AlertTriangle className={`w-4 h-4 ${lowStockCount > 0 ? 'text-orange-600' : 'text-slate-400'}`} />
+              <AlertTriangle className={`w-4 h-4 ${stats.lowStock > 0 ? 'text-orange-600' : 'text-slate-400'}`} />
             </CardHeader>
-            <CardContent><div className={`text-3xl font-bold ${lowStockCount > 0 ? 'text-orange-700' : 'text-slate-800'}`}>{lowStockCount}</div></CardContent>
+            <CardContent><div className={`text-3xl font-bold ${stats.lowStock > 0 ? 'text-orange-700' : 'text-slate-800'}`}>{stats.lowStock}</div></CardContent>
           </Card>
 
           <Card className="border-slate-200">
@@ -248,7 +234,7 @@ const Admin = () => {
               <CardTitle className="text-sm font-medium text-slate-500">إجمالي المنتجات</CardTitle>
               <Box className="w-4 h-4 text-blue-600" />
             </CardHeader>
-            <CardContent><div className="text-3xl font-bold text-slate-800">{products.length}</div></CardContent>
+            <CardContent><div className="text-3xl font-bold text-slate-800">{stats.count}</div></CardContent>
           </Card>
         </div>
 
@@ -277,7 +263,7 @@ const Admin = () => {
                     const details = log.details as any;
                     return (
                       <TableRow key={log.id}>
-                        <TableCell className="font-mono text-sm" dir="ltr" className="text-right">
+                        <TableCell className="font-mono text-sm text-right" dir="ltr">
                           {new Date(log.created_at).toLocaleString('ar-EG')}
                         </TableCell>
                         <TableCell className="text-sm">{log.user_email}</TableCell>
