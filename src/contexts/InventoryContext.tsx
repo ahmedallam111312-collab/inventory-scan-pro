@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
+// Define Types
 export interface Product {
   id: string;
   name: string;
@@ -25,6 +26,7 @@ export interface AuditLog {
 
 interface InventoryContextType {
   products: Product[];
+  batches: any[]; // Placeholder to prevent crashes
   auditLogs: AuditLog[];
   loading: boolean;
   addProduct: (product: any) => Promise<any>;
@@ -34,16 +36,18 @@ interface InventoryContextType {
   scanOut: (productId: string, quantity: number) => Promise<void>;
   getTotalStock: (productId: string) => number;
   fetchProducts: () => Promise<void>;
-  clearAllData: () => Promise<void>; // Ensure this is here
+  clearAllData: () => Promise<void>;
 }
 
 const InventoryContext = createContext<InventoryContextType | undefined>(undefined);
 
 export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Initialize with empty arrays to prevent "undefined" errors
   const [products, setProducts] = useState<Product[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // 1. Fetch Data Safely
   const fetchProducts = useCallback(async () => {
     try {
       const { data, error } = await supabase
@@ -53,7 +57,10 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         .order('name', { ascending: true });
 
       if (error) throw error;
+
+      // CRITICAL FIX: Always default to [] if data is null
       setProducts(data || []);
+
     } catch (error) {
       console.error('Error fetching products:', error);
     } finally {
@@ -61,6 +68,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   }, []);
 
+  // 2. Real-time Listener
   useEffect(() => {
     fetchProducts();
     const channel = supabase
@@ -74,6 +82,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return () => { supabase.removeChannel(channel); };
   }, [fetchProducts]);
 
+  // Actions
   const logAction = async (action: string, details: any) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user?.email) {
@@ -131,31 +140,26 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return product ? (product.quantity || 0) : 0;
   };
 
-  // --- SAFE CLEAR FUNCTION ---
   const clearAllData = async () => {
     try {
-      // 1. Delete Audit Logs first (to avoid reference errors)
       await supabase.from('audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-
-      // 2. Delete Products
       const { error } = await supabase.from('products').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-
       if (error) throw error;
-
-      // 3. Reset Local State explicitly
       setProducts([]);
       setAuditLogs([]);
-
-      toast.success('تم حذف جميع البيانات بنجاح');
+      toast.success('All data cleared.');
     } catch (error: any) {
       console.error(error);
-      toast.error('حدث خطأ أثناء الحذف');
+      toast.error('Failed to clear data.');
     }
   };
 
   return (
     <InventoryContext.Provider value={{
-      products, auditLogs, loading,
+      products,
+      batches: [], // CRITICAL FIX: Empty array prevents legacy code crashes
+      auditLogs,
+      loading,
       addProduct, updateProduct, deleteProduct,
       scanIn, scanOut, getTotalStock, fetchProducts, clearAllData
     }}>

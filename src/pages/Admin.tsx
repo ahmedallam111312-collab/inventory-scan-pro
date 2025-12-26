@@ -15,12 +15,15 @@ import {
 import * as XLSX from 'xlsx';
 import { toast } from 'sonner';
 
-// 🔒 REPLACE THIS WITH YOUR REAL ADMIN EMAIL
+// 🔒 REPLACE WITH YOUR EMAIL
 const ADMIN_EMAIL = "ahmedallam111312@gmail.com";
 
 const Admin = () => {
-  // CRASH FIX 1: Add " = {}" to useInventory destructuring to prevent context errors
-  const { products = [], auditLogs = [], fetchProducts, clearAllData, addProduct } = useInventory() || {};
+  // CRASH FIX: Default everything to empty objects/arrays
+  const inventory = useInventory() || {};
+  const products = inventory.products || [];
+  const auditLogs = inventory.auditLogs || [];
+  const { fetchProducts, clearAllData, addProduct } = inventory;
 
   const { user } = useAuth();
   const [isImporting, setIsImporting] = useState(false);
@@ -29,48 +32,39 @@ const Admin = () => {
 
   const isAdmin = user?.email === ADMIN_EMAIL;
 
-  // --- STATS (CRASH FIX 2: Added safe checks so math never fails) ---
+  // --- STATS CALCULATION (SAFE MODE) ---
   const stats = useMemo(() => {
-    // Safety: ensure safeProducts is always an array
-    const safeProducts = Array.isArray(products) ? products : [];
+    // Ensure products is an array before reducing
+    const safeList = Array.isArray(products) ? products : [];
 
-    const totalVal = safeProducts.reduce((sum, p) => {
+    const totalVal = safeList.reduce((sum, p) => {
       const price = Number(p.price) || 0;
       const qty = Number(p.quantity) || 0;
       return sum + (price * qty);
     }, 0);
 
-    const lowStock = safeProducts.filter(p => (Number(p.quantity) || 0) <= (p.reorderPoint || 10)).length;
+    const lowStock = safeList.filter(p => (Number(p.quantity) || 0) <= (p.reorderPoint || 10)).length;
 
-    return { totalVal, lowStock, count: safeProducts.length };
+    return { totalVal, lowStock, count: safeList.length };
   }, [products]);
 
-  // Safety: ensure activity is always an array
   const recentActivity = Array.isArray(auditLogs) ? auditLogs.slice(0, 10) : [];
 
-  // --- DELETE ALL DATA ---
+  // --- ACTIONS ---
   const handleClearAll = async () => {
     if (!isAdmin) {
-      toast.error("Permission Denied", { description: "Only Admin can perform this action." });
+      toast.error("Permission Denied");
       return;
     }
-
-    if (
-      window.confirm("⚠️ DANGER: Are you sure you want to delete ALL data?") &&
-      window.confirm("This action cannot be undone. All products and logs will be lost forever. Proceed?")
-    ) {
+    if (confirm("⚠️ Are you sure you want to DELETE ALL DATA? This cannot be undone.")) {
       setIsClearing(true);
       if (clearAllData) await clearAllData();
       setIsClearing(false);
     }
   };
 
-  // --- IMPORT LOGIC ---
   const handleImportClick = () => {
-    if (!isAdmin) {
-      toast.error("Access Denied", { description: "Only the Admin account can import inventory." });
-      return;
-    }
+    if (!isAdmin) { toast.error("Access Denied"); return; }
     fileInputRef.current?.click();
   };
 
@@ -87,31 +81,27 @@ const Admin = () => {
         const workbook = XLSX.read(data, { type: 'array' });
         const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 
-        toast.info("Importing...", { description: `Processing ${jsonData.length} rows.` });
-
+        toast.info(`Processing ${jsonData.length} rows...`);
         let successCount = 0;
 
         for (const row of jsonData as any[]) {
-          const getValue = (key: string) => {
-            const foundKey = Object.keys(row).find(k => k.toLowerCase().includes(key));
-            return foundKey ? row[foundKey] : undefined;
+          const getVal = (k: string) => {
+            const found = Object.keys(row).find(key => key.toLowerCase().includes(k));
+            return found ? row[found] : undefined;
           };
 
-          const sku = getValue('sku');
-          const name = getValue('name') || getValue('product');
-          const price = getValue('price');
-          const quantity = getValue('qty') || getValue('quantity') || 0;
+          const sku = getVal('sku');
+          const name = getVal('name') || getVal('product');
 
-          if (sku && name) {
-            // Check existence safely
-            const exists = (products || []).find(p => p.sku === String(sku));
-
-            if (!exists && addProduct) {
+          if (sku && name && addProduct) {
+            // Only add if it doesn't exist locally
+            const exists = products.find((p: any) => p.sku === String(sku));
+            if (!exists) {
               await addProduct({
                 sku: String(sku),
                 name: String(name),
-                price: Number(price) || 0,
-                quantity: Number(quantity),
+                price: Number(getVal('price')) || 0,
+                quantity: Number(getVal('qty')) || Number(getVal('quantity')) || 0,
                 category: 'Imported',
                 reorderPoint: 10
               });
@@ -119,13 +109,10 @@ const Admin = () => {
             }
           }
         }
-
-        toast.success("Import Complete!", { description: `Added ${successCount} new products.` });
+        toast.success(`Imported ${successCount} products.`);
         if (fetchProducts) fetchProducts();
-
-      } catch (error: any) {
-        console.error(error);
-        toast.error("Import Failed", { description: error.message });
+      } catch (err) {
+        toast.error("Import failed");
       } finally {
         setIsImporting(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -134,161 +121,100 @@ const Admin = () => {
     reader.readAsArrayBuffer(file);
   };
 
-  // --- EXPORT LOGIC ---
   const exportInventoryReport = () => {
     try {
-      const data = (products || []).map(product => ({
-        'Product': product.name,
-        'SKU': product.sku,
-        'Category': product.category || '-',
-        'Price': product.price,
-        'Quantity': product.quantity || 0,
-        'Total Value': (Number(product.price) || 0) * (Number(product.quantity) || 0),
+      const data = products.map((p: any) => ({
+        'Product': p.name,
+        'SKU': p.sku,
+        'Price': p.price,
+        'Quantity': p.quantity,
+        'Total Value': (p.price || 0) * (p.quantity || 0)
       }));
-
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
-      XLSX.writeFile(wb, `inventory-report-${new Date().toISOString().split('T')[0]}.xlsx`);
-      toast.success('Report exported successfully');
-    } catch (error) { toast.error('Failed to export'); }
+      XLSX.writeFile(wb, 'inventory_report.xlsx');
+      toast.success("Export successful");
+    } catch (e) { toast.error("Export failed"); }
   };
 
   const getActionColor = (action: string) => {
-    switch (action) {
-      case 'SCAN_IN': return 'bg-green-100 text-green-700';
-      case 'SCAN_OUT': return 'bg-orange-100 text-orange-700';
-      case 'ADJUST': return 'bg-blue-100 text-blue-700';
-      case 'DELETE': return 'bg-red-100 text-red-700';
-      default: return 'bg-slate-100 text-slate-600';
-    }
+    if (action === 'SCAN_IN') return 'bg-green-100 text-green-800';
+    if (action === 'SCAN_OUT') return 'bg-orange-100 text-orange-800';
+    return 'bg-slate-100 text-slate-800';
   };
 
   return (
     <DashboardLayout>
       <div className="space-y-6" dir="rtl">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold font-heading flex items-center gap-3">
-              <ShieldCheck className="w-8 h-8 text-blue-600" />
-              لوحة التحكم (Admin)
-            </h1>
-            <div className="text-muted-foreground mt-1 flex items-center gap-2">
-              <span>المستخدم:</span>
-              <span className="font-mono text-blue-600">{user?.email}</span>
-              {isAdmin && <Badge className="bg-blue-600">مسؤول</Badge>}
-            </div>
-          </div>
+        <div className="flex justify-between items-center">
+          <h1 className="text-3xl font-bold flex gap-2 items-center">
+            <ShieldCheck className="text-blue-600" /> لوحة التحكم
+          </h1>
+          <Badge variant="outline" className="text-blue-600">{user?.email}</Badge>
         </div>
 
-        {/* Action Buttons */}
-        <Card className="border-slate-200 shadow-sm">
+        <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileSpreadsheet className="w-5 h-5 text-blue-600" />
-              إدارة البيانات
-            </CardTitle>
-            <CardDescription>
-              استيراد وتصدير البيانات أو حذف النظام بالكامل (خطر)
-            </CardDescription>
+            <CardTitle>إدارة البيانات</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-4 items-center">
-            {/* Import */}
-            <input type="file" ref={fileInputRef} onChange={processImport} className="hidden" accept=".xlsx,.xls,.csv" />
-            <Button
-              onClick={handleImportClick}
-              className={isAdmin ? "bg-blue-600 hover:bg-blue-700" : "opacity-50 cursor-not-allowed"}
-              disabled={isImporting || isClearing}
-            >
-              {isImporting ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <Upload className="w-4 h-4 ml-2" />}
-              استيراد Excel
+          <CardContent className="flex gap-2 flex-wrap">
+            <input type="file" ref={fileInputRef} onChange={processImport} className="hidden" accept=".xlsx,.csv" />
+            <Button onClick={handleImportClick} disabled={isImporting} className="bg-blue-600">
+              {isImporting ? <Loader2 className="animate-spin" /> : <Upload className="w-4 h-4 ml-2" />} استيراد
             </Button>
-
-            {/* Export */}
-            <Button onClick={exportInventoryReport} variant="outline" disabled={isImporting || isClearing}>
-              <Download className="w-4 h-4 ml-2" />
-              تصدير تقرير
-            </Button>
-
-            {/* DANGER: Clear Data */}
+            <Button onClick={exportInventoryReport} variant="outline"><Download className="w-4 h-4 ml-2" /> تصدير</Button>
             <div className="mr-auto">
-              <Button
-                onClick={handleClearAll}
-                variant="destructive"
-                disabled={isClearing || isImporting || !isAdmin}
-              >
-                {isClearing ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : <Trash2 className="w-4 h-4 ml-2" />}
-                حذف جميع البيانات
+              <Button onClick={handleClearAll} variant="destructive" disabled={isClearing}>
+                {isClearing ? <Loader2 className="animate-spin" /> : <Trash2 className="w-4 h-4 ml-2" />} حذف الكل
               </Button>
             </div>
           </CardContent>
         </Card>
 
-        {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className="border-slate-200">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-slate-500">إجمالي قيمة المخزون</CardTitle>
-              <DollarSign className="w-4 h-4 text-green-600" />
-            </CardHeader>
-            <CardContent><div className="text-3xl font-bold text-slate-800">{stats.totalVal.toLocaleString()} ج.م</div></CardContent>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">القيمة الإجمالية</CardTitle></CardHeader>
+            <CardContent><div className="text-3xl font-bold text-green-600">{stats.totalVal.toLocaleString()} ج.م</div></CardContent>
           </Card>
-
-          <Card className={`border-slate-200 ${stats.lowStock > 0 ? 'border-orange-200 bg-orange-50' : ''}`}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-slate-500">نواقص (مخزون منخفض)</CardTitle>
-              <AlertTriangle className={`w-4 h-4 ${stats.lowStock > 0 ? 'text-orange-600' : 'text-slate-400'}`} />
-            </CardHeader>
-            <CardContent><div className={`text-3xl font-bold ${stats.lowStock > 0 ? 'text-orange-700' : 'text-slate-800'}`}>{stats.lowStock}</div></CardContent>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">نواقص</CardTitle></CardHeader>
+            <CardContent><div className="text-3xl font-bold text-orange-600">{stats.lowStock}</div></CardContent>
           </Card>
-
-          <Card className="border-slate-200">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-slate-500">إجمالي المنتجات</CardTitle>
-              <Box className="w-4 h-4 text-blue-600" />
-            </CardHeader>
-            <CardContent><div className="text-3xl font-bold text-slate-800">{stats.count}</div></CardContent>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">المنتجات</CardTitle></CardHeader>
+            <CardContent><div className="text-3xl font-bold text-blue-600">{stats.count}</div></CardContent>
           </Card>
         </div>
 
-        {/* Activity Table */}
-        <Card className="border-slate-200 shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2"><Activity className="w-5 h-5 text-blue-600" /> سجل النشاطات الحديثة</CardTitle>
-          </CardHeader>
+        <Card>
+          <CardHeader><CardTitle>النشاطات الأخيرة</CardTitle></CardHeader>
           <CardContent className="p-0">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-right">التوقيت</TableHead>
+                  <TableHead className="text-right">الوقت</TableHead>
                   <TableHead className="text-right">المستخدم</TableHead>
-                  <TableHead className="text-right">الإجراء</TableHead>
+                  <TableHead className="text-right">الحدث</TableHead>
                   <TableHead className="text-right">التفاصيل</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {recentActivity.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4} className="text-center py-8 text-slate-500">لا يوجد نشاطات مسجلة</TableCell>
-                  </TableRow>
+                  <TableRow><TableCell colSpan={4} className="text-center py-8">لا يوجد نشاطات</TableCell></TableRow>
                 ) : (
-                  recentActivity.map(log => {
-                    const details = log.details as any;
-                    return (
-                      <TableRow key={log.id}>
-                        <TableCell className="font-mono text-sm text-right" dir="ltr">
-                          {new Date(log.created_at).toLocaleString('ar-EG')}
-                        </TableCell>
-                        <TableCell className="text-sm">{log.user_email}</TableCell>
-                        <TableCell><Badge className={getActionColor(log.action)}>{log.action}</Badge></TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {details?.product_name || details?.name || 'منتج'}
-                          {details?.quantity_added ? ` (+${details.quantity_added})` : ''}
-                          {details?.quantity_removed ? ` (-${details.quantity_removed})` : ''}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
+                  recentActivity.map((log: any) => (
+                    <TableRow key={log.id}>
+                      <TableCell dir="ltr" className="text-right">{new Date(log.created_at).toLocaleString('ar-EG')}</TableCell>
+                      <TableCell>{log.user_email}</TableCell>
+                      <TableCell><Badge className={getActionColor(log.action)}>{log.action}</Badge></TableCell>
+                      <TableCell className="text-sm text-slate-500">
+                        {log.details?.name || 'منتج'}
+                        {log.details?.added ? ` (+${log.details.added})` : ''}
+                        {log.details?.removed ? ` (-${log.details.removed})` : ''}
+                      </TableCell>
+                    </TableRow>
+                  ))
                 )}
               </TableBody>
             </Table>
