@@ -19,8 +19,8 @@ import { toast } from 'sonner';
 const ADMIN_EMAIL = "ahmedallam111312@gmail.com";
 
 const Admin = () => {
-  // FIXED: Added " = []" defaults. This stops the "undefined reading reduce" crash.
-  const { products = [], auditLogs = [], fetchProducts, clearAllData, addProduct } = useInventory();
+  // CRASH FIX 1: Add " = {}" to useInventory destructuring to prevent context errors
+  const { products = [], auditLogs = [], fetchProducts, clearAllData, addProduct } = useInventory() || {};
 
   const { user } = useAuth();
   const [isImporting, setIsImporting] = useState(false);
@@ -29,10 +29,10 @@ const Admin = () => {
 
   const isAdmin = user?.email === ADMIN_EMAIL;
 
-  // --- STATS ---
+  // --- STATS (CRASH FIX 2: Added safe checks so math never fails) ---
   const stats = useMemo(() => {
-    // Extra safety check
-    const safeProducts = products || [];
+    // Safety: ensure safeProducts is always an array
+    const safeProducts = Array.isArray(products) ? products : [];
 
     const totalVal = safeProducts.reduce((sum, p) => {
       const price = Number(p.price) || 0;
@@ -45,7 +45,8 @@ const Admin = () => {
     return { totalVal, lowStock, count: safeProducts.length };
   }, [products]);
 
-  const recentActivity = (auditLogs || []).slice(0, 10);
+  // Safety: ensure activity is always an array
+  const recentActivity = Array.isArray(auditLogs) ? auditLogs.slice(0, 10) : [];
 
   // --- DELETE ALL DATA ---
   const handleClearAll = async () => {
@@ -59,7 +60,7 @@ const Admin = () => {
       window.confirm("This action cannot be undone. All products and logs will be lost forever. Proceed?")
     ) {
       setIsClearing(true);
-      await clearAllData();
+      if (clearAllData) await clearAllData();
       setIsClearing(false);
     }
   };
@@ -102,8 +103,10 @@ const Admin = () => {
           const quantity = getValue('qty') || getValue('quantity') || 0;
 
           if (sku && name) {
+            // Check existence safely
             const exists = (products || []).find(p => p.sku === String(sku));
-            if (!exists) {
+
+            if (!exists && addProduct) {
               await addProduct({
                 sku: String(sku),
                 name: String(name),
